@@ -6,11 +6,9 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "RemPushCore", targets: ["RemPushCore"]),
-        .library(name: "RemPushApp", targets: ["RemPushApp"])
     ],
     targets: [
         .target(name: "RemPushCore"),
-        .target(name: "RemPushApp", dependencies: ["RemPushCore"]),
         .testTarget(name: "RemPushCoreTests", dependencies: ["RemPushCore"])
     ]
 )

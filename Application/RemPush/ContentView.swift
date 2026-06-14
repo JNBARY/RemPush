@@ -1,26 +1,137 @@
-#if canImport(SwiftUI)
+//
+//  ContentView.swift
+//  RemPush
+//
+//  Created by Jonas Ranft on 2026-06-14.
+//
+
 import SwiftUI
+import Combine
 import UserNotifications
 import RemPushCore
 
-@main
-public struct RemPushApp: App {
-    @StateObject private var viewModel = AppViewModel()
 
-    public init() {}
+public struct ContentView: View {
+    @ObservedObject var viewModel: AppViewModel
+    @State private var showingSettings = false
 
-    public var body: some Scene {
-        WindowGroup {
-            ContentView(viewModel: viewModel)
+    public var body: some View {
+        ZStack(alignment: .top) {
+            LinearGradient(
+                colors: [.black.opacity(0.04), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            TabView(selection: $viewModel.selectedPageIndex) {
+                ForEach(viewModel.store.pages) { page in
+                    NotePageView(
+                        page: page,
+                        onSave: { title, body in
+                            viewModel.save(
+                                index: page.index,
+                                title: title,
+                                body: body
+                            )
+                        },
+                        onDelete: {
+                            viewModel.delete(index: page.index)
+                        },
+                        onNotify: {
+                            viewModel.notify(index: page.index)
+                        }
+                    )
+                    .tag(page.index)
+                    .background(
+                        pageColor(page.index)
+                            .ignoresSafeArea()
+                    )
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Einstellungen")
+                }
+            }
+
+            if let toast = viewModel.toastMessage {
+                ToastView(message: toast)
+                    .padding(.top, 18)
+                    .transition(
+                        .move(edge: .top)
+                        .combined(with: .opacity)
+                    )
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            viewModel.toastMessage = nil
+                        }
+                    }
+            }
         }
-        Settings {
-            SettingsView(viewModel: viewModel)
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                SettingsView(viewModel: viewModel)
+                    .navigationTitle("Einstellungen")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Fertig") {
+                                showingSettings = false
+                            }
+                        }
+                    }
+            }
         }
+        .sheet(
+            item: Binding(
+                get: { viewModel.pendingConflicts.first },
+                set: { _ in }
+            )
+        ) { conflict in
+            ConflictResolutionView(
+                conflict: conflict
+            ) { choice in
+                viewModel.resolve(
+                    conflict,
+                    choosing: choice
+                )
+            }
+        }
+    }
+
+    private func pageColor(_ index: Int) -> Color {
+        let colors: [Color] = [
+            .red,
+            .orange,
+            .yellow,
+            .green,
+            .mint,
+            .cyan,
+            .blue,
+            .purple,
+            .pink
+        ]
+
+        return colors[index % colors.count]
+            .opacity(0.18)
     }
 }
 
+
+
 @MainActor
 public final class AppViewModel: ObservableObject {
+    public let objectWillChange = ObservableObjectPublisher()
+    
     @Published public var store: NoteStore
     @Published public var selectedPageIndex: Int
     @Published public var toastMessage: String?
@@ -32,18 +143,33 @@ public final class AppViewModel: ObservableObject {
     private let syncEngine = SyncEngine()
 
     public init(
-        scheduler: LocalNotificationScheduler = LocalNotificationScheduler(),
+        scheduler: LocalNotificationScheduler,
         persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
     ) {
         self.scheduler = scheduler
         self.persistence = persistence
-        self.settings = (try? persistence.loadSettings()) ?? AppSettings()
-        let snapshot = try? persistence.loadSnapshot()
-        self.store = NoteStore(snapshot: snapshot ?? RemPushSnapshot(pages: [], lastUsedPageIndex: 0), notificationScheduler: scheduler)
-        let destination = store.launchDestination()
+
+        // Compute everything with local values first to avoid using `self` before full initialization
+        let loadedSettings = (try? persistence.loadSettings()) ?? AppSettings()
+        let loadedSnapshot = (try? persistence.loadSnapshot()) ?? RemPushSnapshot(pages: [], lastUsedPageIndex: 0)
+        let initialStore = NoteStore(snapshot: loadedSnapshot, notificationScheduler: scheduler)
+        let destination = initialStore.launchDestination()
+
+        // Now assign stored properties
+        self.settings = loadedSettings
+        self.store = initialStore
         self.selectedPageIndex = destination.pageIndex
         self.toastMessage = destination.message
+
+        // Safe to call instance methods after all stored properties are initialized
         exportPreviousMonthIfNeeded()
+    }
+
+    /// Convenience initializer to safely create defaults on the main actor
+    public convenience init(
+        persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+    ) {
+        self.init(scheduler: LocalNotificationScheduler(), persistence: persistence)
     }
 
     public func save(index: Int, title: String, body: String) {
@@ -60,13 +186,13 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func notify(index: Int) {
-        Task {
+        Task { @MainActor in
             do {
                 try await scheduler.requestAuthorizationIfNeeded()
                 try store.scheduleTitleNotification(pageIndex: index)
-                await MainActor.run { toastMessage = "Push für den Titel geplant." }
+                toastMessage = "Push für den Titel geplant."
             } catch {
-                await MainActor.run { toastMessage = "Push konnte nicht geplant werden." }
+                toastMessage = "Push konnte nicht geplant werden."
             }
         }
     }
@@ -118,49 +244,6 @@ public final class AppViewModel: ObservableObject {
     }
 }
 
-public struct ContentView: View {
-    @ObservedObject var viewModel: AppViewModel
-
-    public var body: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(colors: [.black.opacity(0.04), .clear], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-            TabView(selection: $viewModel.selectedPageIndex) {
-                ForEach(viewModel.store.pages) { page in
-                    NotePageView(page: page) { title, body in
-                        viewModel.save(index: page.index, title: title, body: body)
-                    } onDelete: {
-                        viewModel.delete(index: page.index)
-                    } onNotify: {
-                        viewModel.notify(index: page.index)
-                    }
-                    .tag(page.index)
-                    .background(pageColor(page.index).ignoresSafeArea())
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-
-            if let toast = viewModel.toastMessage {
-                ToastView(message: toast)
-                    .padding(.top, 18)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .task {
-                        try? await Task.sleep(for: .seconds(3))
-                        withAnimation(.easeOut(duration: 0.25)) { viewModel.toastMessage = nil }
-                    }
-            }
-        }
-        .sheet(item: Binding(get: { viewModel.pendingConflicts.first }, set: { _ in })) { conflict in
-            ConflictResolutionView(conflict: conflict) { choice in
-                viewModel.resolve(conflict, choosing: choice)
-            }
-        }
-    }
-
-    private func pageColor(_ index: Int) -> Color {
-        [.red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink][index].opacity(0.18)
-    }
-}
 
 private struct NotePageView: View {
     let page: NotePage
@@ -168,7 +251,7 @@ private struct NotePageView: View {
     let onDelete: () -> Void
     let onNotify: () -> Void
     @State private var title: String
-    @State private var body: String
+    @State private var noteBody: String
     @FocusState private var focusedField: Field?
 
     private enum Field { case title, body }
@@ -179,7 +262,7 @@ private struct NotePageView: View {
         self.onDelete = onDelete
         self.onNotify = onNotify
         _title = State(initialValue: page.title)
-        _body = State(initialValue: page.body)
+        _noteBody = State(initialValue: page.body)
     }
 
     var body: some View {
@@ -192,7 +275,7 @@ private struct NotePageView: View {
                     .focused($focusedField, equals: .title)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .body }
-                TextEditor(text: $body)
+                TextEditor(text: $noteBody)
                     .font(.system(.body, design: .rounded))
                     .scrollContentBackground(.hidden)
                     .padding(12)
@@ -204,8 +287,8 @@ private struct NotePageView: View {
             .padding(22)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
-            .onChange(of: title) { _, newValue in onSave(newValue, body) }
-            .onChange(of: body) { _, newValue in onSave(title, newValue) }
+            .onChange(of: title) { _, newValue in onSave(newValue, noteBody) }
+            .onChange(of: noteBody) { _, newValue in onSave(title, newValue) }
             .task {
                 if page.isEmpty { focusedField = .body }
             }
@@ -325,7 +408,8 @@ private struct SettingsView: View {
     }
 }
 
-public final class LocalNotificationScheduler: NotificationScheduling {
+@MainActor
+public final class LocalNotificationScheduler: @MainActor NotificationScheduling {
     private var authorized = false
     public init() {}
 
@@ -343,4 +427,4 @@ public final class LocalNotificationScheduler: NotificationScheduling {
         UNUserNotificationCenter.current().add(notification)
     }
 }
-#endif
+
