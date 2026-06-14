@@ -1,0 +1,187 @@
+{
+  "color-space-for-untagged-svg-colors" : "display-p3",
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-bue.svg",
+          "name" : "Rectangle_rounded-bue",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              106.65625,
+              218
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-cyan.svg",
+          "name" : "Rectangle_rounded-cyan",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -111.34375,
+              355.5
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Rectangle_rounded-green.svg",
+          "name" : "Rectangle_rounded-green",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -329.34375000000006,
+              218
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-orange.svg",
+          "name" : "Rectangle_rounded-orange",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              162.328125,
+              -218
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-red.svg",
+          "name" : "Rectangle_rounded-red",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -40.34375,
+              -353.796875
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-purple.svg",
+          "name" : "Rectangle_rounded-purple",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -258.34375,
+              -294
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-mint.svg",
+          "name" : "Rectangle_rounded-mint",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -329.34374999999994,
+              -147
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-yellow.svg",
+          "name" : "Rectangle_rounded-yellow",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              -476.34375,
+              43.828125
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Rectangle_rounded-pink.svg",
+          "name" : "Rectangle_rounded-pink",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 3,
+            "translation-in-points" : [
+              253.65625,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "darken",
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "automatic"
+            }
+          ],
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "Arrow_angled.svg",
+          "name" : "Arrow_angled",
+          "opacity" : 0.8,
+          "position" : {
+            "scale" : 4,
+            "translation-in-points" : [
+              17.72171973882115,
+              24.645966773804275
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "image-name" : "Arrow_angled-white.svg",
+          "name" : "Arrow_angled-white",
+          "position" : {
+            "scale" : 4,
+            "translation-in-points" : [
+              18.57574498935344,
+              24.645966773804275
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
