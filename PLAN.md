@@ -33,3 +33,14 @@ RemPush ist eine iOS-App für genau neun farblich unterschiedliche Notizseiten. 
 - SwiftUI-App-Code, der auf iOS kompiliert und die geforderten UI-Elemente skizziert/abbildet.
 - Mockbare Push-, Export- und Sync-Schichten.
 - Dokumentierte Anschlussstellen für echtes iCloud/CloudKit, Ordnerauswahl und produktive Monatsend-Automation.
+
+## Fortschritt: Basisversion 2
+- Persistenz ist jetzt als `RemPushSnapshot` mit JSON-Dateiadapter modelliert; die App speichert nach jeder Änderung, damit Notizen nicht durch App-Neustarts verloren gehen.
+- Einstellungen enthalten den Archivpfad und den zuletzt exportierten Monat. Der Monatsend-Export wird durch `MonthlyExportService` idempotent ausgelöst und schreibt `RemPush-YYYY-MM.txt` in den konfigurierten Ordner.
+- Sync ist auf Snapshot-Ebene vorbereitet: konfliktfreie Remote-Änderungen werden übernommen; gleichzeitige Änderungen liefern `SyncConflict`-Objekte mit Diff, die in der GUI als Entscheidungssheet angezeigt werden.
+- Die GUI wurde auf geringe Latenz und Minimalismus ausgerichtet: direkte lokale Speicherung, schlanke Seitenkarten, fokussierter Editor, dezente Farben, nicht blockierende Toasts und nur zwei primäre Aktionen pro Seite (Push, Löschen).
+
+## Noch offene produktive Adapterarbeit
+- Echte iCloud-Anbindung sollte den vorhandenen Snapshot über CloudKit oder ubiquitäre Dokumente transportieren und `applyRemoteSnapshot(_:)` bei Änderungen aufrufen.
+- Die iOS-Ordnerauswahl sollte den derzeitigen Pfad-Textfeld-Prototyp durch `UIDocumentPickerViewController` samt Security-Scoped Bookmark ersetzen.
+- Für App-Store-Auslieferung ist ein Xcode-Projekt bzw. eine XcodeGen/Tuist-Konfiguration mit Capabilities für iCloud und Push-Benachrichtigungen zu ergänzen.
