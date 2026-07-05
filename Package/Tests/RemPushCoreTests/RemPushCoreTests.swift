@@ -54,6 +54,15 @@ final class RemPushCoreTests: XCTestCase {
         XCTAssertEqual(scheduler.requests, [.init(title: "Push mich", body: "RemPush Gedankenstütze")])
     }
 
+    func testPushRequestFallsBackWhenTitleIsEmptyAndRequiresScheduler() throws {
+        let storeWithoutScheduler = NoteStore(clock: { Date(timeIntervalSince1970: 1) })
+        try storeWithoutScheduler.save(pageIndex: 1, title: "", body: "Nur Body")
+        XCTAssertEqual(try storeWithoutScheduler.notificationRequest(pageIndex: 1), .init(title: "RemPush Seite 2", body: "RemPush Gedankenstütze"))
+        XCTAssertThrowsError(try storeWithoutScheduler.scheduleTitleNotification(pageIndex: 1)) { error in
+            XCTAssertEqual(error as? RemPushError, .notificationSchedulerMissing)
+        }
+    }
+
     func testMonthlyExportIsChronologicalAndNamed() throws {
         let store = NoteStore(clock: { Date(timeIntervalSince1970: 1) })
         try store.save(pageIndex: 1, title: "Später", body: "B")
@@ -86,7 +95,7 @@ final class RemPushCoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let persistence = JSONFilePersistence(directoryURL: directory)
         let snapshot = RemPushSnapshot(pages: [NotePage(index: 2, title: "Persistiert", body: "B", createdAt: .init(timeIntervalSince1970: 2), updatedAt: nil, revision: 1)], lastUsedPageIndex: 2)
-        let settings = AppSettings(archiveDirectoryPath: "/archive", lastExportedMonthIdentifier: "2026-06")
+        let settings = AppSettings(archiveDirectoryPath: "/archive", archiveDirectoryBookmark: Data([1, 2, 3]), lastExportedMonthIdentifier: "2026-06")
 
         try persistence.saveSnapshot(snapshot)
         try persistence.saveSettings(settings)

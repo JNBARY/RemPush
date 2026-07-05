@@ -44,10 +44,12 @@ public struct RemPushSnapshot: Codable, Equatable, Sendable {
 
 public struct AppSettings: Codable, Equatable, Sendable {
     public var archiveDirectoryPath: String?
+    public var archiveDirectoryBookmark: Data?
     public var lastExportedMonthIdentifier: String?
 
-    public init(archiveDirectoryPath: String? = nil, lastExportedMonthIdentifier: String? = nil) {
+    public init(archiveDirectoryPath: String? = nil, archiveDirectoryBookmark: Data? = nil, lastExportedMonthIdentifier: String? = nil) {
         self.archiveDirectoryPath = archiveDirectoryPath
+        self.archiveDirectoryBookmark = archiveDirectoryBookmark
         self.lastExportedMonthIdentifier = lastExportedMonthIdentifier
     }
 }
@@ -81,6 +83,8 @@ public enum RemPushError: Error, Equatable {
     case invalidPageIndex
     case emptyPageCannotNotify
     case archiveDirectoryMissing
+    case notificationAuthorizationDenied
+    case notificationSchedulerMissing
 }
 
 public final class NoteStore {
@@ -88,7 +92,7 @@ public final class NoteStore {
     public private(set) var lastUsedPageIndex: Int
 
     private let clock: () -> Date
-    private weak var notificationScheduler: NotificationScheduling?
+    private let notificationScheduler: NotificationScheduling?
 
     public init(pages: [NotePage]? = nil, lastUsedPageIndex: Int = 0, clock: @escaping () -> Date = Date.init, notificationScheduler: NotificationScheduling? = nil) {
         let snapshot = RemPushSnapshot(pages: pages ?? [], lastUsedPageIndex: lastUsedPageIndex)
@@ -138,11 +142,17 @@ public final class NoteStore {
         lastUsedPageIndex = pageIndex
     }
 
-    public func scheduleTitleNotification(pageIndex: Int) throws {
+    public func notificationRequest(pageIndex: Int) throws -> NotificationRequest {
         guard pages.indices.contains(pageIndex) else { throw RemPushError.invalidPageIndex }
         let page = pages[pageIndex]
         guard !page.isEmpty else { throw RemPushError.emptyPageCannotNotify }
-        try notificationScheduler?.schedule(NotificationRequest(title: page.title, body: "RemPush Gedankenstütze"))
+        let title = page.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return NotificationRequest(title: title.isEmpty ? "RemPush Seite \(pageIndex + 1)" : title, body: "RemPush Gedankenstütze")
+    }
+
+    public func scheduleTitleNotification(pageIndex: Int) throws {
+        guard let notificationScheduler else { throw RemPushError.notificationSchedulerMissing }
+        try notificationScheduler.schedule(notificationRequest(pageIndex: pageIndex))
     }
 }
 

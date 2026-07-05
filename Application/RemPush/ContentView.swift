@@ -8,6 +8,8 @@
 import SwiftUI
 import Combine
 import UserNotifications
+import UIKit
+import UniformTypeIdentifiers
 import RemPushCore
 
 
@@ -16,40 +18,57 @@ public struct ContentView: View {
     @State private var showingSettings = false
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(
-                colors: [.black.opacity(0.04), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+        NavigationStack {
+            ZStack(alignment: .top) {
+                LinearGradient(
+                    colors: [.black.opacity(0.04), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
-            TabView(selection: $viewModel.selectedPageIndex) {
-                ForEach(viewModel.store.pages) { page in
-                    NotePageView(
-                        page: page,
-                        onSave: { title, body in
-                            viewModel.save(
-                                index: page.index,
-                                title: title,
-                                body: body
-                            )
-                        },
-                        onDelete: {
-                            viewModel.delete(index: page.index)
-                        },
-                        onNotify: {
-                            viewModel.notify(index: page.index)
+                TabView(selection: $viewModel.selectedPageIndex) {
+                    ForEach(viewModel.store.pages) { page in
+                        NotePageView(
+                            page: page,
+                            onSave: { title, body in
+                                viewModel.save(
+                                    index: page.index,
+                                    title: title,
+                                    body: body
+                                )
+                            },
+                            onDelete: {
+                                viewModel.delete(index: page.index)
+                            },
+                            onNotify: {
+                                viewModel.notify(index: page.index)
+                            }
+                        )
+                        .tag(page.index)
+                        .background(
+                            pageColor(page.index)
+                                .ignoresSafeArea()
+                        )
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.86), value: viewModel.selectedPageIndex)
+
+                if let toast = viewModel.toastMessage {
+                    ToastView(message: toast)
+                        .id(toast)
+                        .padding(.top, 18)
+                        .transition(
+                            .move(edge: .top)
+                            .combined(with: .opacity)
+                        )
+                        .task(id: toast) {
+                            await viewModel.dismissToast(after: .seconds(3), matching: toast)
                         }
-                    )
-                    .tag(page.index)
-                    .background(
-                        pageColor(page.index)
-                            .ignoresSafeArea()
-                    )
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -59,22 +78,6 @@ public struct ContentView: View {
                     }
                     .accessibilityLabel("Einstellungen")
                 }
-            }
-
-            if let toast = viewModel.toastMessage {
-                ToastView(message: toast)
-                    .padding(.top, 18)
-                    .transition(
-                        .move(edge: .top)
-                        .combined(with: .opacity)
-                    )
-                    .task {
-                        try? await Task.sleep(for: .seconds(3))
-
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            viewModel.toastMessage = nil
-                        }
-                    }
             }
         }
         .sheet(isPresented: $showingSettings) {
@@ -141,6 +144,9 @@ public final class AppViewModel: ObservableObject {
     private let scheduler: LocalNotificationScheduler
     private let persistence: JSONFilePersistence
     private let syncEngine = SyncEngine()
+    private let cloudSync: ICloudSnapshotSync
+    private var isApplyingRemoteSnapshot = false
+    private var pendingCloudPublishTask: Task<Void, Never>?
 
     public init(
         scheduler: LocalNotificationScheduler,
@@ -148,6 +154,7 @@ public final class AppViewModel: ObservableObject {
     ) {
         self.scheduler = scheduler
         self.persistence = persistence
+        self.cloudSync = ICloudSnapshotSync()
 
         // Compute everything with local values first to avoid using `self` before full initialization
         let loadedSettings = (try? persistence.loadSettings()) ?? AppSettings()
@@ -161,8 +168,11 @@ public final class AppViewModel: ObservableObject {
         self.selectedPageIndex = destination.pageIndex
         self.toastMessage = destination.message
 
-        // Safe to call instance methods after all stored properties are initialized
-        exportPreviousMonthIfNeeded()
+        // Defer iCloud and archive work until after the first local render so startup stays responsive.
+        Task { @MainActor in
+            await Task.yield()
+            startBackgroundServices(initialSnapshot: initialStore.snapshot)
+        }
     }
 
     /// Convenience initializer to safely create defaults on the main actor
@@ -175,34 +185,42 @@ public final class AppViewModel: ObservableObject {
     public func save(index: Int, title: String, body: String) {
         objectWillChange.send()
         try? store.save(pageIndex: index, title: title, body: body)
-        persistSnapshot()
+        persistSnapshot(debounced: true)
     }
 
     public func delete(index: Int) {
         objectWillChange.send()
         store.delete(pageIndex: index)
+        selectedPageIndex = index
         persistSnapshot()
-        toastMessage = "Seite \(index + 1) gelöscht."
+        showToast("Seite \(index + 1) gelöscht.")
     }
 
     public func notify(index: Int) {
         Task { @MainActor in
             do {
                 try await scheduler.requestAuthorizationIfNeeded()
-                try store.scheduleTitleNotification(pageIndex: index)
-                toastMessage = "Push für den Titel geplant."
+                let request = try store.notificationRequest(pageIndex: index)
+                try await scheduler.schedule(request)
+                showToast("Push für den Titel geplant.")
             } catch {
-                toastMessage = "Push konnte nicht geplant werden."
+                showToast("Push konnte nicht geplant werden.")
             }
         }
     }
 
     public func applyRemoteSnapshot(_ snapshot: RemPushSnapshot) {
+        flushPendingSnapshotPersistence()
+        isApplyingRemoteSnapshot = true
+        defer { isApplyingRemoteSnapshot = false }
         let result = syncEngine.merge(localPages: store.pages, remotePages: snapshot.pages)
         objectWillChange.send()
         for page in result.0 { try? store.replace(page: page) }
         pendingConflicts = result.1
         persistSnapshot()
+        if !result.1.isEmpty {
+            showToast("iCloud-Konflikt erkannt.")
+        }
     }
 
     public func resolve(_ conflict: SyncConflict, choosing choice: ConflictChoice) {
@@ -211,32 +229,125 @@ public final class AppViewModel: ObservableObject {
         try? store.replace(page: resolved)
         pendingConflicts.removeAll { $0.id == conflict.id }
         persistSnapshot()
+        cloudSync.publish(snapshot: store.snapshot)
     }
 
     public func chooseArchiveDirectory(path: String) {
         settings.archiveDirectoryPath = path
+        settings.archiveDirectoryBookmark = nil
         persistSettings()
-        toastMessage = "Archivordner gespeichert."
+        showToast("Archivordner gespeichert.")
+    }
+
+    public func chooseArchiveDirectory(url: URL) {
+        do {
+            settings.archiveDirectoryPath = url.path
+            settings.archiveDirectoryBookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            persistSettings()
+            showToast("Archivordner gespeichert.")
+        } catch {
+            showToast("Archivordner konnte nicht gespeichert werden.")
+        }
     }
 
     public func exportPreviousMonthIfNeeded() {
         var mutableSettings = settings
         do {
             let service = MonthlyExportService(writer: FileArchiveWriter())
-            if let result = try service.exportPreviousMonthIfNeeded(now: Date(), pages: store.pages, settings: &mutableSettings) {
+            let result = try withArchiveDirectoryAccess(settings: &mutableSettings) {
+                try service.exportPreviousMonthIfNeeded(now: Date(), pages: store.pages, settings: &mutableSettings)
+            }
+            if let result {
                 settings = mutableSettings
                 persistSettings()
-                toastMessage = "Monatsarchiv gespeichert: \(result.archive.fileName)"
+                showToast("Monatsarchiv gespeichert: \(result.archive.fileName)")
             }
         } catch RemPushError.archiveDirectoryMissing {
             return
         } catch {
-            toastMessage = "Monatsarchiv konnte nicht gespeichert werden."
+            showToast("Monatsarchiv konnte nicht gespeichert werden.")
         }
     }
 
-    private func persistSnapshot() {
-        try? persistence.saveSnapshot(store.snapshot)
+    public func showToast(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            toastMessage = message
+        }
+    }
+
+    public func dismissToast(after duration: Duration, matching message: String) async {
+        try? await Task.sleep(for: duration)
+        guard toastMessage == message else { return }
+        withAnimation(.easeOut(duration: 0.35)) {
+            toastMessage = nil
+        }
+    }
+
+    public func flushPendingSnapshotPersistence() {
+        pendingCloudPublishTask?.cancel()
+        pendingCloudPublishTask = nil
+        publishCurrentSnapshotIfNeeded()
+    }
+
+    private func startBackgroundServices(initialSnapshot: RemPushSnapshot) {
+        cloudSync.onRemoteSnapshot = { [weak self] snapshot in
+            Task { @MainActor in
+                self?.applyRemoteSnapshot(snapshot)
+            }
+        }
+        cloudSync.start()
+        if let cloudSnapshot = cloudSync.loadSnapshot() {
+            applyRemoteSnapshot(cloudSnapshot)
+        } else {
+            cloudSync.publish(snapshot: initialSnapshot)
+        }
+        exportPreviousMonthIfNeeded()
+    }
+
+    private func withArchiveDirectoryAccess<T>(settings: inout AppSettings, operation: () throws -> T) throws -> T {
+        guard let bookmark = settings.archiveDirectoryBookmark else {
+            return try operation()
+        }
+        var isStale = false
+        let url = try URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale)
+        settings.archiveDirectoryPath = url.path
+        if isStale {
+            settings.archiveDirectoryBookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try operation()
+    }
+
+    private func persistSnapshot(debounced: Bool = false) {
+        let snapshot = store.snapshot
+        try? persistence.saveSnapshot(snapshot)
+        pendingCloudPublishTask?.cancel()
+        guard debounced else {
+            pendingCloudPublishTask = nil
+            publish(snapshot: snapshot)
+            return
+        }
+        pendingCloudPublishTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled else { return }
+            publishCurrentSnapshotIfNeeded()
+            pendingCloudPublishTask = nil
+        }
+    }
+
+    private func publishCurrentSnapshotIfNeeded() {
+        publish(snapshot: store.snapshot)
+    }
+
+    private func publish(snapshot: RemPushSnapshot) {
+        if !isApplyingRemoteSnapshot {
+            cloudSync.publish(snapshot: snapshot)
+        }
     }
 
     private func persistSettings() {
@@ -252,6 +363,7 @@ private struct NotePageView: View {
     let onNotify: () -> Void
     @State private var title: String
     @State private var noteBody: String
+    @State private var isApplyingPageUpdate = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case title, body }
@@ -266,8 +378,7 @@ private struct NotePageView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 18) {
                 pageHeader
                 TextField("Titel", text: $title, axis: .vertical)
                     .font(.system(.title, design: .rounded, weight: .semibold))
@@ -280,19 +391,51 @@ private struct NotePageView: View {
                     .scrollContentBackground(.hidden)
                     .padding(12)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(pageAccent.opacity(0.35), lineWidth: 1)
+                    )
                     .focused($focusedField, equals: .body)
                     .accessibilityLabel("Gedankeninhalt")
-                footer
-            }
-            .padding(22)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
-            .onChange(of: title) { _, newValue in onSave(newValue, noteBody) }
-            .onChange(of: noteBody) { _, newValue in onSave(title, newValue) }
-            .task {
-                if page.isEmpty { focusedField = .body }
-            }
+            footer
         }
+        .padding(22)
+        .background(pageAccent.opacity(0.16).ignoresSafeArea())
+        .toolbar { toolbarContent }
+        .onChange(of: title) { _, newValue in
+            guard !isApplyingPageUpdate else { return }
+            onSave(newValue, noteBody)
+        }
+        .onChange(of: noteBody) { _, newValue in
+            guard !isApplyingPageUpdate else { return }
+            onSave(title, newValue)
+        }
+        .task {
+            if page.isEmpty { focusedField = .body }
+        }
+        .onChange(of: page) { _, newPage in
+            synchronizeDraft(with: newPage)
+        }
+        .tint(pageAccent)
+    }
+
+    private func synchronizeDraft(with newPage: NotePage) {
+        guard title != newPage.title || noteBody != newPage.body else { return }
+        isApplyingPageUpdate = true
+        title = newPage.title
+        noteBody = newPage.body
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1))
+            isApplyingPageUpdate = false
+        }
+    }
+
+    private var pageAccent: Color {
+        pagePalette[page.index % pagePalette.count]
+    }
+
+    private var pagePalette: [Color] {
+        [.red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink]
     }
 
     private var pageHeader: some View {
@@ -301,7 +444,7 @@ private struct NotePageView: View {
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(.thinMaterial, in: Capsule())
+                .background(pageAccent.opacity(0.24), in: Capsule())
             Spacer()
             if page.isEmpty {
                 Text("Leer")
@@ -383,19 +526,23 @@ private struct ToastView: View {
 private struct SettingsView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var path: String = ""
+    @State private var showingArchiveDirectoryPicker = false
 
     var body: some View {
         Form {
             Section("iCloud Sync") {
                 Text("Konflikte werden als Diff angezeigt und erst nach Auswahl einer Version aufgelöst.")
-                Text("Offene Seiten werden lokal persistiert und sind für den iCloud-Adapter als Snapshot verfügbar.")
+                Text("Offene Seiten werden automatisch über NSUbiquitousKeyValueStore übertragen, sobald iCloud für die App verfügbar ist.")
                     .foregroundStyle(.secondary)
             }
             Section("Monatsarchiv") {
                 Text(viewModel.settings.archiveDirectoryPath ?? "Noch nicht festgelegt")
                     .foregroundStyle(.secondary)
-                TextField("Archivpfad", text: $path)
-                Button("Speicherort übernehmen") {
+                Button("Archivordner auswählen") {
+                    showingArchiveDirectoryPicker = true
+                }
+                TextField("Archivpfad manuell", text: $path)
+                Button("Manuellen Speicherort übernehmen") {
                     viewModel.chooseArchiveDirectory(path: path)
                     viewModel.exportPreviousMonthIfNeeded()
                 }
@@ -405,6 +552,12 @@ private struct SettingsView: View {
             }
         }
         .onAppear { path = viewModel.settings.archiveDirectoryPath ?? "" }
+        .sheet(isPresented: $showingArchiveDirectoryPicker) {
+            ArchiveDirectoryPicker { url in
+                viewModel.chooseArchiveDirectory(url: url)
+                viewModel.exportPreviousMonthIfNeeded()
+            }
+        }
     }
 }
 
@@ -415,16 +568,124 @@ public final class LocalNotificationScheduler: @MainActor NotificationScheduling
 
     public func requestAuthorizationIfNeeded() async throws {
         guard !authorized else { return }
-        authorized = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional || settings.authorizationStatus == .ephemeral {
+            authorized = true
+            return
+        }
+        authorized = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        if !authorized { throw RemPushError.notificationAuthorizationDenied }
     }
 
     public func schedule(_ request: NotificationRequest) throws {
+        Task { try await schedule(request) }
+    }
+
+    public func schedule(_ request: NotificationRequest) async throws {
+        guard authorized else { throw RemPushError.notificationAuthorizationDenied }
         let content = UNMutableNotificationContent()
-        content.title = request.title
+        content.title = request.title.isEmpty ? "RemPush" : request.title
         content.body = request.body
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let notification = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(notification)
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
+        let notification = UNNotificationRequest(identifier: "rempush-page-title-\(UUID().uuidString)", content: content, trigger: trigger)
+        try await UNUserNotificationCenter.current().add(notification)
+    }
+}
+
+private struct ArchiveDirectoryPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+
+        init(onPick: @escaping (URL) -> Void) {
+            self.onPick = onPick
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
+    }
+}
+
+@MainActor
+private final class ICloudSnapshotSync {
+    var onRemoteSnapshot: ((RemPushSnapshot) -> Void)?
+
+    private let store = NSUbiquitousKeyValueStore.default
+    private let snapshotKey = "rempush.snapshot.v1"
+    private let originKey = "rempush.snapshot.origin.v1"
+    private let deviceID = UUID().uuidString
+    private var observer: NSObjectProtocol?
+
+    func start() {
+        observer = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: store,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.receiveRemoteSnapshotIfNeeded() }
+        }
+        store.synchronize()
+    }
+
+    func loadSnapshot() -> RemPushSnapshot? {
+        decodeSnapshot(from: store.string(forKey: snapshotKey))
+    }
+
+    func publish(snapshot: RemPushSnapshot) {
+        guard let data = try? JSONEncoder.rempushApp.encode(snapshot),
+              let json = String(data: data, encoding: .utf8) else { return }
+        store.set(json, forKey: snapshotKey)
+        store.set(deviceID, forKey: originKey)
+        store.synchronize()
+    }
+
+    private func receiveRemoteSnapshotIfNeeded() {
+        guard store.string(forKey: originKey) != deviceID,
+              let snapshot = loadSnapshot() else { return }
+        onRemoteSnapshot?(snapshot)
+    }
+
+    private func decodeSnapshot(from json: String?) -> RemPushSnapshot? {
+        guard let data = json?.data(using: .utf8) else { return nil }
+        return try? JSONDecoder.rempushApp.decode(RemPushSnapshot.self, from: data)
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+}
+
+private extension JSONEncoder {
+    static var rempushApp: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+}
+
+private extension JSONDecoder {
+    static var rempushApp: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 }
 
