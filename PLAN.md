@@ -44,3 +44,26 @@ RemPush ist eine iOS-App für genau neun farblich unterschiedliche Notizseiten. 
 - Echte iCloud-Anbindung sollte den vorhandenen Snapshot über CloudKit oder ubiquitäre Dokumente transportieren und `applyRemoteSnapshot(_:)` bei Änderungen aufrufen.
 - Die iOS-Ordnerauswahl sollte den derzeitigen Pfad-Textfeld-Prototyp durch `UIDocumentPickerViewController` samt Security-Scoped Bookmark ersetzen.
 - Für App-Store-Auslieferung ist ein Xcode-Projekt bzw. eine XcodeGen/Tuist-Konfiguration mit Capabilities für iCloud und Push-Benachrichtigungen zu ergänzen.
+
+## Fortschritt: Basisversion 3
+- Toasts werden jetzt zentral im ViewModel animiert angezeigt und per nachrichtengebundener Task nach wenigen Sekunden wieder ausgeblendet, damit neue Hinweise alte Ausblend-Timer nicht blockieren.
+- Nach dem Löschen synchronisiert die Seitenansicht ihren lokalen Editor-State explizit mit dem geleerten Store-Modell, sodass Titel und Inhalt sofort aus der UI verschwinden und nicht erst nach einem App-Neustart.
+- Der iOS-Push-Adapter prüft vorhandene Berechtigungen, fordert Alert/Sound/Badge-Rechte an, behandelt verweigerte Berechtigungen als Fehler und plant lokale Titel-Benachrichtigungen mit Sound und stabilem RemPush-Identifier-Präfix.
+- Jede der neun Seiten nutzt nun ihre eigene Akzentfarbe für Hintergrund, Eingaberahmen, Header-Chip und Bedienelement-Tint.
+
+## Fortschritt: Basisversion 4
+- Die Push-Erzeugung ist jetzt vollständig überprüfbar: `NoteStore` erzeugt dedizierte `NotificationRequest`s, hält den Scheduler stark und meldet fehlende Scheduler explizit statt lautlos nichts zu tun; der iOS-Adapter wartet auf das asynchrone `UNUserNotificationCenter.add`.
+- Die Archivordner-Auswahl ist in der App produktiv über `UIDocumentPickerViewController` verdrahtet und speichert ein Bookmark, das beim Monatsarchiv-Export wieder aufgelöst und als Security-Scoped Resource geöffnet wird.
+- iCloud-Synchronisation ist in der App über `NSUbiquitousKeyValueStore` angebunden: lokale Snapshots werden nach Änderungen veröffentlicht, entfernte Snapshots werden beim Start und bei iCloud-Änderungen verlustfrei über den vorhandenen `SyncEngine` gemerged.
+- Die Einstellungen zeigen nun die echte Ordnerauswahl, behalten den manuellen Pfad als Fallback und beschreiben die automatische iCloud-Übertragung statt nur eine vorbereitete Schnittstelle.
+
+## Fortschritt: Performance-Pass
+- Der Appstart rendert jetzt zuerst den lokalen Snapshot; iCloud-Start, iCloud-Erstmerge und Monatsarchiv-Prüfung laufen anschließend als Hintergrund-Arbeit auf dem MainActor an, damit die erste Seite schneller interaktiv wird.
+- Texteingaben schreiben den Store weiterhin sofort für flüssige UI, bündeln aber JSON-Persistenz und iCloud-Veröffentlichung mit einem kurzen Debounce statt bei jedem Tastendruck synchron Datei- und iCloud-I/O auszulösen.
+- Beim Wechsel in den Hintergrund werden ausstehende Schreibvorgänge explizit geflusht, sodass die Debounce-Optimierung keine Daten verliert.
+- Editor-State wird nur noch aktualisiert, wenn Remote-/Delete-Änderungen tatsächlich andere Werte liefern; dadurch wird die laufende Tastatureingabe weniger durch selbst ausgelöste Store-Updates gestört.
+
+## Fortschritt: Performance-Pass 2
+- Lokale Snapshots werden bei jeder Änderung wieder sofort atomar geschrieben, damit selbst ein plötzlicher App-Abbruch möglichst keine Texteingabe verliert; nur die teurere iCloud-Veröffentlichung bleibt debounced.
+- Das Löschen einer Seite ist gegen nachlaufende SwiftUI-`onChange`-Callbacks abgesichert: programmatische Editor-Synchronisierung unterdrückt Speichervorgänge, damit ein geleerter Slot nicht unbeabsichtigt direkt wieder angelegt wird.
+- Für flüssigere Wischanimationen gibt es nur noch einen gemeinsamen `NavigationStack` um die Kartenansicht statt eines NavigationStacks pro Seite; der Kartenwechsel nutzt eine kurze interaktive Spring-Animation.
