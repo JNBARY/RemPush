@@ -254,13 +254,25 @@ public final class AppViewModel: ObservableObject {
         var mutableSettings = settings
         do {
             let service = MonthlyExportService(writer: FileArchiveWriter())
+            let settingsSnapshot = mutableSettings
             let result = try withArchiveDirectoryAccess(settings: &mutableSettings) {
-                try service.exportPreviousMonthIfNeeded(now: Date(), pages: store.pages, settings: &mutableSettings)
+                // Work on a separate local copy so we don't read from mutableSettings while it's passed as inout.
+                var exportSettings = settingsSnapshot
+                let exportResult = try service.exportPreviousMonthIfNeeded(
+                    now: Date(),
+                    pages: store.pages,
+                    settings: &exportSettings
+                )
+                // Return both the possibly updated settings and the export result.
+                return (exportSettings, exportResult)
             }
-            if let result {
+            // Unpack results from the operation and apply them after the inout access ends.
+            let (updatedSettings, exportResult) = result
+            mutableSettings = updatedSettings
+            if let exportResult {
                 settings = mutableSettings
                 persistSettings()
-                showToast("Monatsarchiv gespeichert: \(result.archive.fileName)")
+                showToast("Monatsarchiv gespeichert: \(exportResult.archive.fileName)")
             }
         } catch RemPushError.archiveDirectoryMissing {
             return
@@ -268,6 +280,8 @@ public final class AppViewModel: ObservableObject {
             showToast("Monatsarchiv konnte nicht gespeichert werden.")
         }
     }
+    
+
 
     public func showToast(_ message: String) {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -637,7 +651,11 @@ private final class ICloudSnapshotSync {
             object: store,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.receiveRemoteSnapshotIfNeeded() }
+            guard let strongSelf = self else { return }
+            let receiver = strongSelf
+            Task { @MainActor in
+                receiver.receiveRemoteSnapshotIfNeeded()
+            }
         }
         store.synchronize()
     }
