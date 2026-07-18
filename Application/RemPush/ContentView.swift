@@ -12,6 +12,34 @@ import UIKit
 import UniformTypeIdentifiers
 import RemPushCore
 
+private struct ConflictResolutionView: View {
+    let conflict: SyncConflict
+    let onResolve: (ConflictChoice) -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Differing Versions of this Page exist. Decide what to keep:")
+                    .font(.headline)
+                ScrollView {
+                    Text(conflict.diff)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                HStack {
+                    Button("Upload Local to iCloud") { onResolve(.local) }
+                        .buttonStyle(.bordered)
+                    Button("Downlod from iCloud and delete Local") { onResolve(.remote) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .navigationTitle("Sync-Konflikt")
+        }
+    }
+}
 
 public struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
@@ -20,23 +48,14 @@ public struct ContentView: View {
     public var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                LinearGradient(
-                    colors: [.black.opacity(0.04), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
 
                 TabView(selection: $viewModel.selectedPageIndex) {
-                    ForEach(viewModel.store.pages) { page in
-                        NotePageView(
+                    ForEach(viewModel.store.pages, id: \.id) { page in
+                        NotePageContainer(
                             page: page,
+                            selectedIndex: $viewModel.selectedPageIndex,
                             onSave: { title, body in
-                                viewModel.save(
-                                    index: page.index,
-                                    title: title,
-                                    body: body
-                                )
+                                viewModel.save(index: page.index, title: title, body: body)
                             },
                             onDelete: {
                                 viewModel.delete(index: page.index)
@@ -45,15 +64,10 @@ public struct ContentView: View {
                                 viewModel.notify(index: page.index)
                             }
                         )
-                        .tag(page.index)
-                        .background(
-                            pageColor(page.index)
-                                .ignoresSafeArea()
-                        )
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-                .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.86), value: viewModel.selectedPageIndex)
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                
 
                 if let toast = viewModel.toastMessage {
                     ToastView(message: toast)
@@ -64,7 +78,7 @@ public struct ContentView: View {
                             .combined(with: .opacity)
                         )
                         .task(id: toast) {
-                            await viewModel.dismissToast(after: .seconds(3), matching: toast)
+                            await viewModel.dismissToast(after: .seconds(2), matching: toast)
                         }
                 }
             }
@@ -76,18 +90,18 @@ public struct ContentView: View {
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Einstellungen")
+                    .accessibilityLabel("Settings")
                 }
             }
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView(viewModel: viewModel)
-                    .navigationTitle("Einstellungen")
+                    .navigationTitle("Settings")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button("Fertig") {
+                            Button("complete") {
                                 showingSettings = false
                             }
                         }
@@ -111,6 +125,17 @@ public struct ContentView: View {
         }
     }
 
+    fileprivate static func pageColorStatic(_ index: Int) -> Color {
+        let colors: [Color] = [
+            .red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink
+        ]
+        return colors[index % colors.count].opacity(0.4)
+    }
+
+    private func pageBackgroundColor(for index: Int) -> Color {
+        pageColor(index)
+    }
+
     private func pageColor(_ index: Int) -> Color {
         let colors: [Color] = [
             .red,
@@ -125,11 +150,205 @@ public struct ContentView: View {
         ]
 
         return colors[index % colors.count]
-            .opacity(0.18)
+            .opacity(0.4)
+    }
+}
+
+private struct NotePageContainer: View {
+    let page: NotePage
+    @Binding var selectedIndex: Int
+    let onSave: (String, String) -> Void
+    let onDelete: () -> Void
+    let onNotify: () -> Void
+
+    var body: some View {
+        NotePageView(
+            page: page,
+            onSave: onSave,
+            onDelete: onDelete,
+            onNotify: onNotify
+        )
+        .tag(page.index)
+        .background(
+            ContentView.pageColorStatic(page.index)
+                .ignoresSafeArea()
+        )
+    }
+}
+
+private struct NotePageView: View {
+    let page: NotePage
+    let onSave: (String, String) -> Void
+    let onDelete: () -> Void
+    let onNotify: () -> Void
+    @State private var title: String
+    @State private var noteBody: String
+    @State private var isApplyingPageUpdate = false
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case title, body }
+
+    init(page: NotePage, onSave: @escaping (String, String) -> Void, onDelete: @escaping () -> Void, onNotify: @escaping () -> Void) {
+        self.page = page
+        self.onSave = onSave
+        self.onDelete = onDelete
+        self.onNotify = onNotify
+        _title = State(initialValue: page.title)
+        _noteBody = State(initialValue: page.body)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+                pageHeader
+                TextField("Titel", text: $title, axis: .vertical)
+                    .font(.system(.title, design: .rounded, weight: .semibold))
+                    .textFieldStyle(.plain)
+                    .focused($focusedField, equals: .title)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .body }
+                TextEditor(text: $noteBody)
+                    .font(.system(.body, design: .rounded))
+                    .scrollContentBackground(.hidden)
+                    .padding(12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(pageAccent.opacity(0.35), lineWidth: 1)
+                    )
+                    .focused($focusedField, equals: .body)
+                    .accessibilityLabel("Your thoughts")
+            footer
+        }
+        .padding(22)
+        .background(pageAccent.opacity(0.16).ignoresSafeArea())
+        .toolbar { toolbarContent }
+        .onChange(of: title) { _, newValue in
+            guard !isApplyingPageUpdate else { return }
+            onSave(newValue, noteBody)
+        }
+        .onChange(of: noteBody) { _, newValue in
+            guard !isApplyingPageUpdate else { return }
+            onSave(title, newValue)
+        }
+        .task {
+            if page.isEmpty { focusedField = .body }
+        }
+        .onChange(of: page) { _, newPage in
+            synchronizeDraft(with: newPage)
+        }
+        .tint(pageAccent)
+    }
+
+    private func synchronizeDraft(with newPage: NotePage) {
+        guard title != newPage.title || noteBody != newPage.body else { return }
+        isApplyingPageUpdate = true
+        title = newPage.title
+        noteBody = newPage.body
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1))
+            isApplyingPageUpdate = false
+        }
+    }
+
+    private var pageAccent: Color {
+        pagePalette[page.index % pagePalette.count]
+    }
+
+    private var pagePalette: [Color] {
+        [.red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink]
+    }
+
+    private var pageHeader: some View {
+        HStack {
+            Text("Page \(page.index + 1) of \(RemPushConstants.pageCount)")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(pageAccent.opacity(0.24), in: Capsule())
+            Spacer()
+            if page.isEmpty {
+                Text("is empty")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            if let createdAt = page.createdAt {
+                Text("Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                EmptyView()
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { onNotify() } label: { Image(systemName: "bell.badge") }
+                
+                .accessibilityLabel("Show Title as PushNotification")
+            Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
+                
+                .accessibilityLabel("Delete Note")
+        }
     }
 }
 
 
+private struct ToastView: View {
+    let message: String
+    var body: some View {
+        Text(message)
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
+            .shadow(radius: 12, y: 6)
+    }
+}
+
+private struct SettingsView: View {
+    @ObservedObject var viewModel: AppViewModel
+    @State private var path: String = ""
+    @State private var showingArchiveDirectoryPicker = false
+
+    var body: some View {
+        Form {
+            Section("iCloud Sync") {
+                Text("Konflikte werden als Diff angezeigt und erst nach Auswahl einer Version aufgelöst.")
+                Text("Offene Seiten werden automatisch über NSUbiquitousKeyValueStore übertragen, sobald iCloud für die App verfügbar ist.")
+                    .foregroundStyle(.secondary)
+            }
+            Section("Monatsarchiv") {
+                Text(viewModel.settings.archiveDirectoryPath ?? "Noch nicht festgelegt")
+                    .foregroundStyle(.secondary)
+                Button("Archivordner auswählen") {
+                    showingArchiveDirectoryPicker = true
+                }
+                TextField("Archivpfad manuell", text: $path)
+                Button("Manuellen Speicherort übernehmen") {
+                    viewModel.chooseArchiveDirectory(path: path)
+                    viewModel.exportPreviousMonthIfNeeded()
+                }
+                Button("Monatsarchiv jetzt prüfen") {
+                    viewModel.exportPreviousMonthIfNeeded()
+                }
+            }
+        }
+        .onAppear { path = viewModel.settings.archiveDirectoryPath ?? "" }
+        .sheet(isPresented: $showingArchiveDirectoryPicker) {
+            ArchiveDirectoryPicker { url in
+                viewModel.chooseArchiveDirectory(url: url)
+                viewModel.exportPreviousMonthIfNeeded()
+            }
+        }
+    }
+}
 
 @MainActor
 public final class AppViewModel: ObservableObject {
@@ -193,7 +412,7 @@ public final class AppViewModel: ObservableObject {
         store.delete(pageIndex: index)
         selectedPageIndex = index
         persistSnapshot()
-        showToast("Seite \(index + 1) gelöscht.")
+        showToast("Deleted Page \(index + 1)")
     }
 
     public func notify(index: Int) {
@@ -202,9 +421,9 @@ public final class AppViewModel: ObservableObject {
                 try await scheduler.requestAuthorizationIfNeeded()
                 let request = try store.notificationRequest(pageIndex: index)
                 try await scheduler.schedule(request)
-                showToast("Push für den Titel geplant.")
+                showToast("Sceduled Notification")
             } catch {
-                showToast("Push konnte nicht geplant werden.")
+                showToast("Failed to schedule Notification")
             }
         }
     }
@@ -219,7 +438,7 @@ public final class AppViewModel: ObservableObject {
         pendingConflicts = result.1
         persistSnapshot()
         if !result.1.isEmpty {
-            showToast("iCloud-Konflikt erkannt.")
+            showToast("Detedted iCloud-Conflict")
         }
     }
 
@@ -236,7 +455,7 @@ public final class AppViewModel: ObservableObject {
         settings.archiveDirectoryPath = path
         settings.archiveDirectoryBookmark = nil
         persistSettings()
-        showToast("Archivordner gespeichert.")
+        showToast("Saved Archive Directory")
     }
 
     public func chooseArchiveDirectory(url: URL) {
@@ -244,9 +463,9 @@ public final class AppViewModel: ObservableObject {
             settings.archiveDirectoryPath = url.path
             settings.archiveDirectoryBookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
             persistSettings()
-            showToast("Archivordner gespeichert.")
+            showToast("Saved Archive Directory")
         } catch {
-            showToast("Archivordner konnte nicht gespeichert werden.")
+            showToast("Failded to Save Archive Directory")
         }
     }
 
@@ -272,12 +491,12 @@ public final class AppViewModel: ObservableObject {
             if let exportResult {
                 settings = mutableSettings
                 persistSettings()
-                showToast("Monatsarchiv gespeichert: \(exportResult.archive.fileName)")
+                showToast("Saved montly Archive: \(exportResult.archive.fileName)")
             }
         } catch RemPushError.archiveDirectoryMissing {
             return
         } catch {
-            showToast("Monatsarchiv konnte nicht gespeichert werden.")
+            showToast("Failded to Save montly Archive.")
         }
     }
     
@@ -292,7 +511,7 @@ public final class AppViewModel: ObservableObject {
     public func dismissToast(after duration: Duration, matching message: String) async {
         try? await Task.sleep(for: duration)
         guard toastMessage == message else { return }
-        withAnimation(.easeOut(duration: 0.35)) {
+        withAnimation(.easeOut(duration: 0.2)) {
             toastMessage = nil
         }
     }
@@ -370,211 +589,6 @@ public final class AppViewModel: ObservableObject {
 }
 
 
-private struct NotePageView: View {
-    let page: NotePage
-    let onSave: (String, String) -> Void
-    let onDelete: () -> Void
-    let onNotify: () -> Void
-    @State private var title: String
-    @State private var noteBody: String
-    @State private var isApplyingPageUpdate = false
-    @FocusState private var focusedField: Field?
-
-    private enum Field { case title, body }
-
-    init(page: NotePage, onSave: @escaping (String, String) -> Void, onDelete: @escaping () -> Void, onNotify: @escaping () -> Void) {
-        self.page = page
-        self.onSave = onSave
-        self.onDelete = onDelete
-        self.onNotify = onNotify
-        _title = State(initialValue: page.title)
-        _noteBody = State(initialValue: page.body)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-                pageHeader
-                TextField("Titel", text: $title, axis: .vertical)
-                    .font(.system(.title, design: .rounded, weight: .semibold))
-                    .textFieldStyle(.plain)
-                    .focused($focusedField, equals: .title)
-                    .submitLabel(.next)
-                    .onSubmit { focusedField = .body }
-                TextEditor(text: $noteBody)
-                    .font(.system(.body, design: .rounded))
-                    .scrollContentBackground(.hidden)
-                    .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(pageAccent.opacity(0.35), lineWidth: 1)
-                    )
-                    .focused($focusedField, equals: .body)
-                    .accessibilityLabel("Gedankeninhalt")
-            footer
-        }
-        .padding(22)
-        .background(pageAccent.opacity(0.16).ignoresSafeArea())
-        .toolbar { toolbarContent }
-        .onChange(of: title) { _, newValue in
-            guard !isApplyingPageUpdate else { return }
-            onSave(newValue, noteBody)
-        }
-        .onChange(of: noteBody) { _, newValue in
-            guard !isApplyingPageUpdate else { return }
-            onSave(title, newValue)
-        }
-        .task {
-            if page.isEmpty { focusedField = .body }
-        }
-        .onChange(of: page) { _, newPage in
-            synchronizeDraft(with: newPage)
-        }
-        .tint(pageAccent)
-    }
-
-    private func synchronizeDraft(with newPage: NotePage) {
-        guard title != newPage.title || noteBody != newPage.body else { return }
-        isApplyingPageUpdate = true
-        title = newPage.title
-        noteBody = newPage.body
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1))
-            isApplyingPageUpdate = false
-        }
-    }
-
-    private var pageAccent: Color {
-        pagePalette[page.index % pagePalette.count]
-    }
-
-    private var pagePalette: [Color] {
-        [.red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink]
-    }
-
-    private var pageHeader: some View {
-        HStack {
-            Text("Seite \(page.index + 1)/\(RemPushConstants.pageCount)")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(pageAccent.opacity(0.24), in: Capsule())
-            Spacer()
-            if page.isEmpty {
-                Text("Leer")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var footer: some View {
-        HStack {
-            if let createdAt = page.createdAt {
-                Text("Erstellt: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Diktieren über das Mikrofon der iOS-Tastatur, danach frei bearbeiten.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button { onNotify() } label: { Image(systemName: "bell.badge") }
-                .disabled(page.isEmpty)
-                .accessibilityLabel("Titel als Push anzeigen")
-            Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                .disabled(page.isEmpty)
-                .accessibilityLabel("Seite löschen")
-        }
-    }
-}
-
-private struct ConflictResolutionView: View {
-    let conflict: SyncConflict
-    let onResolve: (ConflictChoice) -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Es gibt zwei Versionen dieser Seite. Keine wurde überschrieben.")
-                    .font(.headline)
-                ScrollView {
-                    Text(conflict.diff)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                HStack {
-                    Button("Lokale Version behalten") { onResolve(.local) }
-                        .buttonStyle(.bordered)
-                    Button("iCloud-Version übernehmen") { onResolve(.remote) }
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-            .padding()
-            .navigationTitle("Sync-Konflikt")
-        }
-    }
-}
-
-private struct ToastView: View {
-    let message: String
-    var body: some View {
-        Text(message)
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: Capsule())
-            .shadow(radius: 12, y: 6)
-    }
-}
-
-private struct SettingsView: View {
-    @ObservedObject var viewModel: AppViewModel
-    @State private var path: String = ""
-    @State private var showingArchiveDirectoryPicker = false
-
-    var body: some View {
-        Form {
-            Section("iCloud Sync") {
-                Text("Konflikte werden als Diff angezeigt und erst nach Auswahl einer Version aufgelöst.")
-                Text("Offene Seiten werden automatisch über NSUbiquitousKeyValueStore übertragen, sobald iCloud für die App verfügbar ist.")
-                    .foregroundStyle(.secondary)
-            }
-            Section("Monatsarchiv") {
-                Text(viewModel.settings.archiveDirectoryPath ?? "Noch nicht festgelegt")
-                    .foregroundStyle(.secondary)
-                Button("Archivordner auswählen") {
-                    showingArchiveDirectoryPicker = true
-                }
-                TextField("Archivpfad manuell", text: $path)
-                Button("Manuellen Speicherort übernehmen") {
-                    viewModel.chooseArchiveDirectory(path: path)
-                    viewModel.exportPreviousMonthIfNeeded()
-                }
-                Button("Monatsarchiv jetzt prüfen") {
-                    viewModel.exportPreviousMonthIfNeeded()
-                }
-            }
-        }
-        .onAppear { path = viewModel.settings.archiveDirectoryPath ?? "" }
-        .sheet(isPresented: $showingArchiveDirectoryPicker) {
-            ArchiveDirectoryPicker { url in
-                viewModel.chooseArchiveDirectory(url: url)
-                viewModel.exportPreviousMonthIfNeeded()
-            }
-        }
-    }
-}
-
 @MainActor
 public final class LocalNotificationScheduler: @MainActor NotificationScheduling {
     private var authorized = false
@@ -592,7 +606,14 @@ public final class LocalNotificationScheduler: @MainActor NotificationScheduling
     }
 
     public func schedule(_ request: NotificationRequest) throws {
-        Task { try await schedule(request) }
+        _ = Task { @MainActor in
+            do {
+                try await schedule(request)
+            } catch {
+                // Swallow the error to avoid propagating from the unstructured task.
+                // Scheduling errors are already surfaced to callers of the async API.
+            }
+        }
     }
 
     public func schedule(_ request: NotificationRequest) async throws {
