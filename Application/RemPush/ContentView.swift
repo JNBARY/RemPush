@@ -9,8 +9,18 @@ import SwiftUI
 import Combine
 import UserNotifications
 import UIKit
+import AudioToolbox
 import UniformTypeIdentifiers
 import RemPushCore
+
+
+fileprivate func pageColorStatic(_ index: Int) -> Color {
+    let colors: [Color] = [
+        .red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink
+    ]
+    return colors[index % colors.count].opacity(0.4)
+}
+
 
 private struct ConflictResolutionView: View {
     let conflict: SyncConflict
@@ -48,9 +58,9 @@ public struct ContentView: View {
     public var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-
+                                
                 TabView(selection: $viewModel.selectedPageIndex) {
-                    ForEach(viewModel.store.pages, id: \.id) { page in
+                    ForEach(viewModel.store.pages, id: \.id) { page in pageView(for: page)
                         NotePageContainer(
                             page: page,
                             selectedIndex: $viewModel.selectedPageIndex,
@@ -67,7 +77,7 @@ public struct ContentView: View {
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                
+                                
 
                 if let toast = viewModel.toastMessage {
                     ToastView(message: toast)
@@ -82,6 +92,8 @@ public struct ContentView: View {
                         }
                 }
             }
+            .background(pageColorStatic(viewModel.selectedPageIndex))
+            .ignoresSafeArea(edges: .top)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -124,33 +136,22 @@ public struct ContentView: View {
             }
         }
     }
-
-    fileprivate static func pageColorStatic(_ index: Int) -> Color {
-        let colors: [Color] = [
-            .red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink
-        ]
-        return colors[index % colors.count].opacity(0.4)
-    }
-
-    private func pageBackgroundColor(for index: Int) -> Color {
-        pageColor(index)
-    }
-
-    private func pageColor(_ index: Int) -> Color {
-        let colors: [Color] = [
-            .red,
-            .orange,
-            .yellow,
-            .green,
-            .mint,
-            .cyan,
-            .blue,
-            .purple,
-            .pink
-        ]
-
-        return colors[index % colors.count]
-            .opacity(0.4)
+    
+    private func pageView(for page: NotePage) -> some View {
+        NotePageContainer(
+            page: page,
+            selectedIndex: $viewModel.selectedPageIndex,
+            onSave: { title, body in
+                viewModel.save(index: page.index, title: title, body: body)
+            },
+            onDelete: {
+                viewModel.delete(index: page.index)
+            },
+            onNotify: {
+                viewModel.notify(index: page.index)
+            }
+        )
+        .background(pageColorStatic(page.index))
     }
 }
 
@@ -170,7 +171,7 @@ private struct NotePageContainer: View {
         )
         .tag(page.index)
         .background(
-            ContentView.pageColorStatic(page.index)
+            pageColorStatic(page.index)
                 .ignoresSafeArea()
         )
     }
@@ -184,6 +185,7 @@ private struct NotePageView: View {
     @State private var title: String
     @State private var noteBody: String
     @State private var isApplyingPageUpdate = false
+    @State private var showShareSheet = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case title, body }
@@ -196,11 +198,15 @@ private struct NotePageView: View {
         _title = State(initialValue: page.title)
         _noteBody = State(initialValue: page.body)
     }
+    
+    private var pageAccent: Color {
+        pageColorStatic(page.index)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
                 pageHeader
-                TextField("Titel", text: $title, axis: .vertical)
+                TextField("Title", text: $title, axis: .vertical)
                     .font(.system(.title, design: .rounded, weight: .semibold))
                     .textFieldStyle(.plain)
                     .focused($focusedField, equals: .title)
@@ -213,14 +219,12 @@ private struct NotePageView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(pageAccent.opacity(0.35), lineWidth: 1)
+                            .stroke(pageAccent.opacity(0.5), lineWidth: 1)
                     )
                     .focused($focusedField, equals: .body)
                     .accessibilityLabel("Your thoughts")
-            footer
         }
         .padding(22)
-        .background(pageAccent.opacity(0.16).ignoresSafeArea())
         .toolbar { toolbarContent }
         .onChange(of: title) { _, newValue in
             guard !isApplyingPageUpdate else { return }
@@ -236,7 +240,6 @@ private struct NotePageView: View {
         .onChange(of: page) { _, newPage in
             synchronizeDraft(with: newPage)
         }
-        .tint(pageAccent)
     }
 
     private func synchronizeDraft(with newPage: NotePage) {
@@ -250,13 +253,6 @@ private struct NotePageView: View {
         }
     }
 
-    private var pageAccent: Color {
-        pagePalette[page.index % pagePalette.count]
-    }
-
-    private var pagePalette: [Color] {
-        [.red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink]
-    }
 
     private var pageHeader: some View {
         HStack {
@@ -290,13 +286,37 @@ private struct NotePageView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { onNotify() } label: { Image(systemName: "bell.badge") }
-                
                 .accessibilityLabel("Show Title as PushNotification")
+            Button {
+                  // Klick-Sound
+                  AudioServicesPlaySystemSound(1104)
+                  // Share Sheet öffnen
+                  showShareSheet = true
+                } label: {
+                  Image(systemName: "square.and.arrow.up")
+                }
+                .sheet(isPresented: $showShareSheet) {
+                  ActivityView(items: [noteBody])
+                }
+            
             Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                
                 .accessibilityLabel("Delete Note")
         }
     }
+}
+
+struct ActivityView: UIViewControllerRepresentable {
+  let items: [Any]
+  func makeUIViewController(context: Context) -> UIActivityViewController {
+    UIActivityViewController(
+      activityItems: items,
+      applicationActivities: nil
+    )
+  }
+  func updateUIViewController(
+    _ uiViewController: UIActivityViewController,
+    context: Context
+  ) { }
 }
 
 
