@@ -41,7 +41,7 @@ private struct ConflictResolutionView: View {
                 HStack {
                     Button("Upload Local to iCloud") { onResolve(.local) }
                         .buttonStyle(.bordered)
-                    Button("Downlod from iCloud and delete Local") { onResolve(.remote) }
+                    Button("Download from iCloud and delete Local") { onResolve(.remote) }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -60,7 +60,7 @@ public struct ContentView: View {
             ZStack(alignment: .top) {
                                 
                 TabView(selection: $viewModel.selectedPageIndex) {
-                    ForEach(viewModel.store.pages, id: \.id) { page in pageView(for: page)
+                    ForEach(viewModel.store.pages, id: \.id) { page in
                         NotePageContainer(
                             page: page,
                             selectedIndex: $viewModel.selectedPageIndex,
@@ -136,24 +136,8 @@ public struct ContentView: View {
             }
         }
     }
-    
-    private func pageView(for page: NotePage) -> some View {
-        NotePageContainer(
-            page: page,
-            selectedIndex: $viewModel.selectedPageIndex,
-            onSave: { title, body in
-                viewModel.save(index: page.index, title: title, body: body)
-            },
-            onDelete: {
-                viewModel.delete(index: page.index)
-            },
-            onNotify: {
-                viewModel.notify(index: page.index)
-            }
-        )
-        .background(pageColorStatic(page.index))
-    }
 }
+
 
 private struct NotePageContainer: View {
     let page: NotePage
@@ -205,7 +189,6 @@ private struct NotePageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-                pageHeader
                 TextField("Title", text: $title, axis: .vertical)
                     .font(.system(.title, design: .rounded, weight: .semibold))
                     .textFieldStyle(.plain)
@@ -223,6 +206,7 @@ private struct NotePageView: View {
                     )
                     .focused($focusedField, equals: .body)
                     .accessibilityLabel("Your thoughts")
+            footer
         }
         .padding(22)
         .toolbar { toolbarContent }
@@ -253,8 +237,7 @@ private struct NotePageView: View {
         }
     }
 
-
-    private var pageHeader: some View {
+    private var footer: some View {
         HStack {
             Text("Page \(page.index + 1) of \(RemPushConstants.pageCount)")
                 .font(.caption.weight(.semibold))
@@ -262,21 +245,17 @@ private struct NotePageView: View {
                 .padding(.vertical, 6)
                 .background(pageAccent.opacity(0.24), in: Capsule())
             Spacer()
+            if let createdAt = page.createdAt {
+                Text("Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if page.isEmpty {
                 Text("is empty")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var footer: some View {
-        HStack {
-            if let createdAt = page.createdAt {
-                Text("Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
+            else {
                 EmptyView()
             }
         }
