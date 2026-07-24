@@ -59,8 +59,10 @@ public struct ContentView: View {
         NavigationStack {
             ZStack(alignment: .top) {
                                 
-                TabView(selection: $viewModel.selectedPageIndex) {
-                    ForEach(viewModel.store.pages, id: \.id) { page in
+                LoopingPageView(
+                    pages: viewModel.store.pages,
+                    selectedIndex: $viewModel.selectedPageIndex,
+                    makePage: { page in
                         NotePageContainer(
                             page: page,
                             selectedIndex: $viewModel.selectedPageIndex,
@@ -75,7 +77,7 @@ public struct ContentView: View {
                             }
                         )
                     }
-                }
+                )
                 .tabViewStyle(.page(indexDisplayMode: .never))
                                 
 
@@ -93,7 +95,6 @@ public struct ContentView: View {
                 }
             }
             .background(pageColorStatic(viewModel.selectedPageIndex))
-            .ignoresSafeArea(edges: .top)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -137,6 +138,242 @@ public struct ContentView: View {
         }
     }
 }
+// PreviewProvider struct um die canvas-Vorschau zu aktivieren, Quelle:
+// Source - https://stackoverflow.com/a/67453315
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView(viewModel: AppViewModel())
+    }
+}
+
+
+struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
+
+    let pages: [Page]
+    @Binding var selectedIndex: Int
+    let makePage: (Page) -> Content
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+
+        let controller = UIPageViewController(
+            transitionStyle: .scroll,
+            navigationOrientation: .horizontal
+        )
+
+        context.coordinator.createControllers(
+            pages: pages,
+            makePage: makePage
+        )
+
+        controller.dataSource = context.coordinator
+        controller.delegate = context.coordinator
+
+        if let first = context.coordinator.controllers.first {
+            controller.setViewControllers(
+                [first],
+                direction: .forward,
+                animated: false
+            )
+        }
+
+        return controller
+    }
+
+    func updateUIViewController(
+        _ pageViewController: UIPageViewController,
+        context: Context
+    ) {
+
+        let coordinator = context.coordinator
+
+        if coordinator.controllers.count != pages.count {
+
+            coordinator.createControllers(
+                pages: pages,
+                makePage: makePage
+            )
+
+            guard selectedIndex < coordinator.controllers.count else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                pageViewController.setViewControllers(
+                    [coordinator.controllers[selectedIndex]],
+                    direction: .forward,
+                    animated: false
+                )
+            }
+
+            return
+        }
+
+        // Nur RootViews aktualisieren, nicht Controller neu erzeugen
+        for index in pages.indices {
+            coordinator.controllers[index].rootView =
+                makePage(pages[index])
+        }
+
+        guard selectedIndex < coordinator.controllers.count else {
+            return
+        }
+
+        let targetController = coordinator.controllers[selectedIndex]
+
+        guard
+            pageViewController.viewControllers?.first !== targetController
+        else {
+            return
+        }
+
+        let currentIndex =
+            coordinator.index(of: pageViewController.viewControllers?.first)
+            ?? selectedIndex
+
+        let count = coordinator.controllers.count
+
+        let forwardDistance =
+            (selectedIndex - currentIndex + count) % count
+
+        let backwardDistance =
+            (currentIndex - selectedIndex + count) % count
+
+        let direction: UIPageViewController.NavigationDirection =
+            forwardDistance <= backwardDistance
+            ? .forward
+            : .reverse
+
+        DispatchQueue.main.async {
+            pageViewController.setViewControllers(
+                [targetController],
+                direction: direction,
+                animated: true
+            )
+        }
+    }
+
+
+    final class Coordinator:
+        NSObject,
+        UIPageViewControllerDataSource,
+        UIPageViewControllerDelegate {
+
+        let parent: LoopingPageView
+
+        var controllers: [UIHostingController<Content>] = []
+
+        private var indexMap:
+            [ObjectIdentifier: Int] = [:]
+
+
+        init(_ parent: LoopingPageView) {
+            self.parent = parent
+        }
+
+
+        func createControllers(
+            pages: [Page],
+            makePage: (Page) -> Content
+        ) {
+
+            controllers = pages.map {
+                UIHostingController(
+                    rootView: makePage($0)
+                )
+            }
+
+            indexMap.removeAll()
+
+            for (index, controller) in controllers.enumerated() {
+                indexMap[ObjectIdentifier(controller)] = index
+            }
+        }
+
+
+        func index(of controller: UIViewController?) -> Int? {
+
+            guard let controller else {
+                return nil
+            }
+
+            return indexMap[
+                ObjectIdentifier(controller)
+            ]
+        }
+
+
+        // MARK: - Data Source
+
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerBefore viewController: UIViewController
+        ) -> UIViewController? {
+
+            guard controllers.count > 1,
+                  let index = index(of: viewController)
+            else {
+                return nil
+            }
+
+            let previous =
+                (index - 1 + controllers.count)
+                % controllers.count
+
+            return controllers[previous]
+        }
+
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerAfter viewController: UIViewController
+        ) -> UIViewController? {
+
+            guard controllers.count > 1,
+                  let index = index(of: viewController)
+            else {
+                return nil
+            }
+
+            let next =
+                (index + 1)
+                % controllers.count
+
+            return controllers[next]
+        }
+
+
+        // MARK: - Delegate
+
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            didFinishAnimating finished: Bool,
+            previousViewControllers: [UIViewController],
+            transitionCompleted completed: Bool
+        ) {
+
+            guard completed,
+                  let current =
+                    pageViewController.viewControllers?.first,
+                  let index = index(of: current)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.parent.selectedIndex = index
+            }
+        }
+    }
+}
+
+
+
 
 
 private struct NotePageContainer: View {
@@ -154,10 +391,7 @@ private struct NotePageContainer: View {
             onNotify: onNotify
         )
         .tag(page.index)
-        .background(
-            pageColorStatic(page.index)
-                .ignoresSafeArea()
-        )
+        .background(pageColorStatic(page.index))
     }
 }
 
@@ -200,15 +434,11 @@ private struct NotePageView: View {
                     .scrollContentBackground(.hidden)
                     .padding(12)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(pageAccent.opacity(0.5), lineWidth: 1)
-                    )
                     .focused($focusedField, equals: .body)
                     .accessibilityLabel("Your thoughts")
             footer
         }
-        .padding(22)
+        .padding(12)
         .toolbar { toolbarContent }
         .onChange(of: title) { _, newValue in
             guard !isApplyingPageUpdate else { return }
