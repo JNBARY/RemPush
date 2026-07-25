@@ -54,6 +54,7 @@ private struct ConflictResolutionView: View {
 public struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var showingSettings = false
+    @State private var showShareSheet = false
 
     public var body: some View {
         NavigationStack {
@@ -63,23 +64,48 @@ public struct ContentView: View {
                     pages: viewModel.store.pages,
                     selectedIndex: $viewModel.selectedPageIndex,
                     makePage: { page in
-                        NotePageContainer(
+                        NotePageView(
                             page: page,
-                            selectedIndex: $viewModel.selectedPageIndex,
                             onSave: { title, body in
-                                viewModel.save(index: page.index, title: title, body: body)
-                            },
-                            onDelete: {
-                                viewModel.delete(index: page.index)
-                            },
-                            onNotify: {
-                                viewModel.notify(index: page.index)
+                                viewModel.save(
+                                    index: page.index,
+                                    title: title,
+                                    body: body
+                                )
                             }
                         )
+                        .tag(page.index)
+                        .background(pageColorStatic(page.index))
                     }
                 )
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                                
+                
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            showingSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel("Settings")
+                    }
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button {
+                            viewModel.notify(index: viewModel.selectedPageIndex)
+                        } label: {
+                            Image(systemName: "bell.badge")
+                        }
+                        Button {
+                            showShareSheet = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        Button(role: .destructive) {
+                            viewModel.delete(index: viewModel.selectedPageIndex)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
 
                 if let toast = viewModel.toastMessage {
                     ToastView(message: toast)
@@ -96,16 +122,6 @@ public struct ContentView: View {
             }
             .background(pageColorStatic(viewModel.selectedPageIndex))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
@@ -120,6 +136,16 @@ public struct ContentView: View {
                         }
                     }
             }
+        }
+        
+       
+        
+        .sheet(isPresented: $showShareSheet) {
+            ActivityView(
+                items: [
+                    viewModel.store.pages[viewModel.selectedPageIndex].body
+                ]
+            )
         }
         .sheet(
             item: Binding(
@@ -154,7 +180,9 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
     let makePage: (Page) -> Content
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+        Coordinator { index in
+            self.selectedIndex = index
+        }
     }
 
     func makeUIViewController(context: Context) -> UIPageViewController {
@@ -187,9 +215,11 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         _ pageViewController: UIPageViewController,
         context: Context
     ) {
-
+        context.coordinator.updateSelectedIndex = { index in
+            selectedIndex = index
+        }
         let coordinator = context.coordinator
-
+        
         if coordinator.controllers.count != pages.count {
 
             coordinator.createControllers(
@@ -261,19 +291,15 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         NSObject,
         UIPageViewControllerDataSource,
         UIPageViewControllerDelegate {
-
-        let parent: LoopingPageView
-
+        var updateSelectedIndex: (Int) -> Void
         var controllers: [UIHostingController<Content>] = []
 
-        private var indexMap:
-            [ObjectIdentifier: Int] = [:]
+        private var indexMap: [ObjectIdentifier: Int] = [:]
+        private var pendingIndex: Int?
 
-
-        init(_ parent: LoopingPageView) {
-            self.parent = parent
+        init(updateSelectedIndex: @escaping (Int) -> Void) {
+            self.updateSelectedIndex = updateSelectedIndex
         }
-
 
         func createControllers(
             pages: [Page],
@@ -345,6 +371,19 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
 
             return controllers[next]
         }
+        
+        
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            willTransitionTo pendingViewControllers: [UIViewController]
+        ) {
+            guard let controller = pendingViewControllers.first,
+                  let index = index(of: controller)
+            else {
+                return
+            }
+            pendingIndex = index
+        }
 
 
         // MARK: - Delegate
@@ -356,18 +395,14 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             previousViewControllers: [UIViewController],
             transitionCompleted completed: Bool
         ) {
-
-            guard completed,
-                  let current =
-                    pageViewController.viewControllers?.first,
-                  let index = index(of: current)
-            else {
+            guard completed else {
                 return
             }
-
-            DispatchQueue.main.async {
-                self.parent.selectedIndex = index
+            if let index = pendingIndex {
+                updateSelectedIndex(index)
+                print("didFinishAnimating:", index)
             }
+            pendingIndex = nil
         }
     }
 }
@@ -375,44 +410,23 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
 
 
 
-
-private struct NotePageContainer: View {
-    let page: NotePage
-    @Binding var selectedIndex: Int
-    let onSave: (String, String) -> Void
-    let onDelete: () -> Void
-    let onNotify: () -> Void
-
-    var body: some View {
-        NotePageView(
-            page: page,
-            onSave: onSave,
-            onDelete: onDelete,
-            onNotify: onNotify
-        )
-        .tag(page.index)
-        .background(pageColorStatic(page.index))
-    }
-}
-
 private struct NotePageView: View {
     let page: NotePage
     let onSave: (String, String) -> Void
-    let onDelete: () -> Void
-    let onNotify: () -> Void
     @State private var title: String
     @State private var noteBody: String
     @State private var isApplyingPageUpdate = false
-    @State private var showShareSheet = false
     @FocusState private var focusedField: Field?
-
+    
     private enum Field { case title, body }
-
-    init(page: NotePage, onSave: @escaping (String, String) -> Void, onDelete: @escaping () -> Void, onNotify: @escaping () -> Void) {
+    
+    init(
+        page: NotePage,
+        onSave: @escaping (String, String) -> Void
+    ) {
         self.page = page
         self.onSave = onSave
-        self.onDelete = onDelete
-        self.onNotify = onNotify
+        
         _title = State(initialValue: page.title)
         _noteBody = State(initialValue: page.body)
     }
@@ -420,26 +434,25 @@ private struct NotePageView: View {
     private var pageAccent: Color {
         pageColorStatic(page.index)
     }
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-                TextField("Title", text: $title, axis: .vertical)
-                    .font(.system(.title, design: .rounded, weight: .semibold))
-                    .textFieldStyle(.plain)
-                    .focused($focusedField, equals: .title)
-                    .submitLabel(.next)
-                    .onSubmit { focusedField = .body }
-                TextEditor(text: $noteBody)
-                    .font(.system(.body, design: .rounded))
-                    .scrollContentBackground(.hidden)
-                    .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .focused($focusedField, equals: .body)
-                    .accessibilityLabel("Your thoughts")
+            TextField("Title", text: $title, axis: .vertical)
+                .font(.system(.title, design: .rounded, weight: .semibold))
+                .textFieldStyle(.plain)
+                .focused($focusedField, equals: .title)
+                .submitLabel(.next)
+                .onSubmit { focusedField = .body }
+            TextEditor(text: $noteBody)
+                .font(.system(.body, design: .rounded))
+                .scrollContentBackground(.hidden)
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .focused($focusedField, equals: .body)
+                .accessibilityLabel("Your thoughts")
             footer
         }
         .padding(12)
-        .toolbar { toolbarContent }
         .onChange(of: title) { _, newValue in
             guard !isApplyingPageUpdate else { return }
             onSave(newValue, noteBody)
@@ -455,7 +468,7 @@ private struct NotePageView: View {
             synchronizeDraft(with: newPage)
         }
     }
-
+    
     private func synchronizeDraft(with newPage: NotePage) {
         guard title != newPage.title || noteBody != newPage.body else { return }
         isApplyingPageUpdate = true
@@ -466,7 +479,7 @@ private struct NotePageView: View {
             isApplyingPageUpdate = false
         }
     }
-
+    
     private var footer: some View {
         HStack {
             Text("Page \(page.index + 1) of \(RemPushConstants.pageCount)")
@@ -490,29 +503,8 @@ private struct NotePageView: View {
             }
         }
     }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button { onNotify() } label: { Image(systemName: "bell.badge") }
-                .accessibilityLabel("Show Title as PushNotification")
-            Button {
-                  // Klick-Sound
-                  AudioServicesPlaySystemSound(1104)
-                  // Share Sheet öffnen
-                  showShareSheet = true
-                } label: {
-                  Image(systemName: "square.and.arrow.up")
-                }
-                .sheet(isPresented: $showShareSheet) {
-                  ActivityView(items: [noteBody])
-                }
-            
-            Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                .accessibilityLabel("Delete Note")
-        }
-    }
 }
+
 
 struct ActivityView: UIViewControllerRepresentable {
   let items: [Any]
