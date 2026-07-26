@@ -18,7 +18,7 @@ fileprivate func pageColorStatic(_ index: Int) -> Color {
     let colors: [Color] = [
         .red, .orange, .yellow, .green, .mint, .cyan, .blue, .purple, .pink
     ]
-    return colors[index % colors.count].opacity(0.4)
+    return colors[index % colors.count].opacity(0.9)
 }
 
 
@@ -74,8 +74,8 @@ public struct ContentView: View {
                                 )
                             }
                         )
-                        .tag(page.index)
                         .background(pageColorStatic(page.index))
+                        .ignoresSafeArea()
                     }
                 )
                 
@@ -143,6 +143,7 @@ public struct ContentView: View {
         .sheet(isPresented: $showShareSheet) {
             ActivityView(
                 items: [
+                    viewModel.store.pages[viewModel.selectedPageIndex].title,
                     viewModel.store.pages[viewModel.selectedPageIndex].body
                 ]
             )
@@ -201,6 +202,7 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         controller.delegate = context.coordinator
 
         if let first = context.coordinator.controllers.first {
+            context.coordinator.currentIndex = 0
             controller.setViewControllers(
                 [first],
                 direction: .forward,
@@ -220,6 +222,10 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         }
         let coordinator = context.coordinator
         
+        guard !coordinator.isAnimating else {
+            return
+        }
+        
         if coordinator.controllers.count != pages.count {
 
             coordinator.createControllers(
@@ -231,21 +237,25 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
                 return
             }
 
-            DispatchQueue.main.async {
-                pageViewController.setViewControllers(
-                    [coordinator.controllers[selectedIndex]],
-                    direction: .forward,
-                    animated: false
-                )
-            }
+            pageViewController.setViewControllers(
+                [coordinator.controllers[selectedIndex]],
+                direction: .forward,
+                animated: false
+            )
+            
+            coordinator.currentIndex = selectedIndex
+            
 
             return
         }
 
         // Nur RootViews aktualisieren, nicht Controller neu erzeugen
         for index in pages.indices {
-            coordinator.controllers[index].rootView =
-                makePage(pages[index])
+            let controller = coordinator.controllers[index]
+            controller.rootView = makePage(pages[index])
+
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
         }
 
         guard selectedIndex < coordinator.controllers.count else {
@@ -254,15 +264,11 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
 
         let targetController = coordinator.controllers[selectedIndex]
 
-        guard
-            pageViewController.viewControllers?.first !== targetController
-        else {
+        guard selectedIndex != coordinator.currentIndex else {
             return
         }
 
-        let currentIndex =
-            coordinator.index(of: pageViewController.viewControllers?.first)
-            ?? selectedIndex
+        let currentIndex = coordinator.currentIndex
 
         let count = coordinator.controllers.count
 
@@ -277,13 +283,13 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             ? .forward
             : .reverse
 
-        DispatchQueue.main.async {
-            pageViewController.setViewControllers(
-                [targetController],
-                direction: direction,
-                animated: true
-            )
-        }
+        pageViewController.setViewControllers(
+            [targetController],
+            direction: direction,
+            animated: true
+        )
+
+        coordinator.currentIndex = selectedIndex
     }
 
 
@@ -291,8 +297,12 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         NSObject,
         UIPageViewControllerDataSource,
         UIPageViewControllerDelegate {
+
         var updateSelectedIndex: (Int) -> Void
         var controllers: [UIHostingController<Content>] = []
+
+        var currentIndex = 0
+        var isAnimating = false
 
         private var indexMap: [ObjectIdentifier: Int] = [:]
         private var pendingIndex: Int?
@@ -305,11 +315,12 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             pages: [Page],
             makePage: (Page) -> Content
         ) {
-
             controllers = pages.map {
-                UIHostingController(
+                let controller = UIHostingController(
                     rootView: makePage($0)
                 )
+                
+                return controller
             }
 
             indexMap.removeAll()
@@ -373,15 +384,20 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
         }
         
         
+        
         func pageViewController(
             _ pageViewController: UIPageViewController,
             willTransitionTo pendingViewControllers: [UIViewController]
         ) {
+            isAnimating = true
+            pendingIndex = nil
+
             guard let controller = pendingViewControllers.first,
                   let index = index(of: controller)
             else {
                 return
             }
+
             pendingIndex = index
         }
 
@@ -395,14 +411,22 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             previousViewControllers: [UIViewController],
             transitionCompleted completed: Bool
         ) {
-            guard completed else {
+
+            defer {
+                isAnimating = false
+                pendingIndex = nil
+            }
+
+            guard completed,
+                  let index = pendingIndex
+            else {
                 return
             }
-            if let index = pendingIndex {
-                updateSelectedIndex(index)
-                print("didFinishAnimating:", index)
+
+            currentIndex = index
+            DispatchQueue.main.async {
+                self.updateSelectedIndex(index)
             }
-            pendingIndex = nil
         }
     }
 }
@@ -486,7 +510,7 @@ private struct NotePageView: View {
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(pageAccent.opacity(0.24), in: Capsule())
+                .background(pageAccent.opacity(0.4), in: Capsule())
             Spacer()
             if let createdAt = page.createdAt {
                 Text("Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
