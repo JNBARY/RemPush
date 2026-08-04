@@ -115,12 +115,10 @@ public struct ContentView: View {
                             .move(edge: .top)
                             .combined(with: .opacity)
                         )
-                        .task(id: toast) {
-                            await viewModel.dismissToast(after: .seconds(2), matching: toast)
-                        }
                 }
             }
             .background(pageColorStatic(viewModel.selectedPageIndex))
+            .animation(.easeInOut(duration: 0.25), value: viewModel.selectedPageIndex)
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showingSettings) {
@@ -399,6 +397,9 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             }
 
             pendingIndex = index
+            DispatchQueue.main.async {
+                self.updateSelectedIndex(index)
+            }
         }
 
 
@@ -417,15 +418,17 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
                 pendingIndex = nil
             }
 
-            guard completed,
-                  let index = pendingIndex
-            else {
+            guard let index = pendingIndex else {
                 return
             }
 
-            currentIndex = index
+            if completed {
+                currentIndex = index
+            }
+
+            let displayIndex = completed ? index : currentIndex
             DispatchQueue.main.async {
-                self.updateSelectedIndex(index)
+                self.updateSelectedIndex(displayIndex)
             }
         }
     }
@@ -611,6 +614,7 @@ public final class AppViewModel: ObservableObject {
     private let cloudSync: ICloudSnapshotSync
     private var isApplyingRemoteSnapshot = false
     private var pendingCloudPublishTask: Task<Void, Never>?
+    private var pendingToastDismissTask: Task<Void, Never>?
 
     public init(
         scheduler: LocalNotificationScheduler,
@@ -666,7 +670,7 @@ public final class AppViewModel: ObservableObject {
                 try await scheduler.requestAuthorizationIfNeeded()
                 let request = try store.notificationRequest(pageIndex: index)
                 try await scheduler.schedule(request)
-                showToast("Sceduled Notification")
+                showToast("Notification Created")
             } catch {
                 showToast("Failed to schedule Notification")
             }
@@ -748,15 +752,22 @@ public final class AppViewModel: ObservableObject {
 
 
     public func showToast(_ message: String) {
+        pendingToastDismissTask?.cancel()
         withAnimation(.easeInOut(duration: 0.2)) {
             toastMessage = message
         }
+        pendingToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, toastMessage == message else { return }
+            dismissToast(matching: message)
+        }
     }
 
-    public func dismissToast(after duration: Duration, matching message: String) async {
-        try? await Task.sleep(for: duration)
+    public func dismissToast(matching message: String) {
         guard toastMessage == message else { return }
-        withAnimation(.easeOut(duration: 0.2)) {
+        pendingToastDismissTask?.cancel()
+        pendingToastDismissTask = nil
+        withAnimation(.easeOut(duration: 0.35)) {
             toastMessage = nil
         }
     }
@@ -765,6 +776,13 @@ public final class AppViewModel: ObservableObject {
         pendingCloudPublishTask?.cancel()
         pendingCloudPublishTask = nil
         publishCurrentSnapshotIfNeeded()
+    }
+
+    public func refreshSharedSnapshotFromDisk() {
+        guard let snapshot = try? persistence.loadSnapshot(),
+              snapshot != store.snapshot
+        else { return }
+        applyRemoteSnapshot(snapshot)
     }
 
     private func startBackgroundServices(initialSnapshot: RemPushSnapshot) {
@@ -835,9 +853,13 @@ public final class AppViewModel: ObservableObject {
 
 
 @MainActor
-public final class LocalNotificationScheduler: @MainActor NotificationScheduling {
+public final class LocalNotificationScheduler: NSObject, @MainActor NotificationScheduling, UNUserNotificationCenterDelegate {
     private var authorized = false
-    public init() {}
+
+    public override init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
+    }
 
     public func requestAuthorizationIfNeeded() async throws {
         guard !authorized else { return }
@@ -867,9 +889,19 @@ public final class LocalNotificationScheduler: @MainActor NotificationScheduling
         content.title = request.title.isEmpty ? "RemPush" : request.title
         content.body = request.body
         content.sound = .default
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
-        let notification = UNNotificationRequest(identifier: "rempush-page-title-\(UUID().uuidString)", content: content, trigger: trigger)
+        let notification = UNNotificationRequest(
+            identifier: "rempush-page-title-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
         try await UNUserNotificationCenter.current().add(notification)
+    }
+
+    nonisolated public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
     }
 }
 
