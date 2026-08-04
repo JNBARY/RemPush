@@ -62,10 +62,12 @@ public struct LaunchDestination: Equatable, Sendable {
 public struct NotificationRequest: Equatable, Sendable {
     public let title: String
     public let body: String
+    public let pageIndex: Int
 
-    public init(title: String, body: String) {
+    public init(title: String, body: String, pageIndex: Int) {
         self.title = title
         self.body = body
+        self.pageIndex = pageIndex
     }
 }
 
@@ -147,7 +149,11 @@ public final class NoteStore {
         let page = pages[pageIndex]
         guard !page.isEmpty else { throw RemPushError.emptyPageCannotNotify }
         let title = page.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return NotificationRequest(title: title.isEmpty ? "RemPush Seite \(pageIndex + 1)" : title, body: pages[pageIndex].body)
+        return NotificationRequest(
+            title: title.isEmpty ? "RemPush Seite \(pageIndex + 1)" : title,
+            body: "RemPush Gedankenstütze",
+            pageIndex: pageIndex
+        )
     }
 
     public func scheduleTitleNotification(pageIndex: Int) throws {

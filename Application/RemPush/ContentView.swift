@@ -115,12 +115,10 @@ public struct ContentView: View {
                             .move(edge: .top)
                             .combined(with: .opacity)
                         )
-                        .task(id: toast) {
-                            await viewModel.dismissToast(after: .seconds(2), matching: toast)
-                        }
                 }
             }
             .background(pageColorStatic(viewModel.selectedPageIndex))
+            .animation(.easeInOut(duration: 0.25), value: viewModel.selectedPageIndex)
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showingSettings) {
@@ -249,14 +247,11 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             return
         }
 
-        // Nur RootViews aktualisieren, nicht Controller neu erzeugen
-        for index in pages.indices {
-            let controller = coordinator.controllers[index]
-            controller.rootView = makePage(pages[index])
-
-            controller.view.setNeedsLayout()
-            controller.view.layoutIfNeeded()
-        }
+        coordinator.refreshNearbyControllers(
+            around: selectedIndex,
+            pages: pages,
+            makePage: makePage
+        )
 
         guard selectedIndex < coordinator.controllers.count else {
             return
@@ -342,6 +337,24 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             ]
         }
 
+        func refreshNearbyControllers(
+            around selectedIndex: Int,
+            pages: [Page],
+            makePage: (Page) -> Content
+        ) {
+            guard !controllers.isEmpty, pages.indices.contains(selectedIndex) else { return }
+            let count = controllers.count
+            let visibleIndexes = Set([
+                selectedIndex,
+                (selectedIndex - 1 + count) % count,
+                (selectedIndex + 1) % count
+            ])
+
+            for index in visibleIndexes where pages.indices.contains(index) {
+                controllers[index].rootView = makePage(pages[index])
+            }
+        }
+
 
         // MARK: - Data Source
 
@@ -399,6 +412,9 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
             }
 
             pendingIndex = index
+            DispatchQueue.main.async {
+                self.updateSelectedIndex(index)
+            }
         }
 
 
@@ -417,15 +433,17 @@ struct LoopingPageView<Page, Content: View>: UIViewControllerRepresentable {
                 pendingIndex = nil
             }
 
-            guard completed,
-                  let index = pendingIndex
-            else {
+            guard let index = pendingIndex else {
                 return
             }
 
-            currentIndex = index
+            if completed {
+                currentIndex = index
+            }
+
+            let displayIndex = completed ? index : currentIndex
             DispatchQueue.main.async {
-                self.updateSelectedIndex(index)
+                self.updateSelectedIndex(displayIndex)
             }
         }
     }
@@ -611,10 +629,11 @@ public final class AppViewModel: ObservableObject {
     private let cloudSync: ICloudSnapshotSync
     private var isApplyingRemoteSnapshot = false
     private var pendingCloudPublishTask: Task<Void, Never>?
+    private var pendingToastDismissTask: Task<Void, Never>?
 
     public init(
         scheduler: LocalNotificationScheduler,
-        persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+        persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: SharedAppStorage.persistenceDirectoryURL)
     ) {
         self.scheduler = scheduler
         self.persistence = persistence
@@ -631,6 +650,9 @@ public final class AppViewModel: ObservableObject {
         self.store = initialStore
         self.selectedPageIndex = destination.pageIndex
         self.toastMessage = destination.message
+        scheduler.onPageOpenRequest = { [weak self] pageIndex in
+            self?.open(pageIndex: pageIndex)
+        }
 
         // Defer iCloud and archive work until after the first local render so startup stays responsive.
         Task { @MainActor in
@@ -641,7 +663,7 @@ public final class AppViewModel: ObservableObject {
 
     /// Convenience initializer to safely create defaults on the main actor
     public convenience init(
-        persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+        persistence: JSONFilePersistence = JSONFilePersistence(directoryURL: SharedAppStorage.persistenceDirectoryURL)
     ) {
         self.init(scheduler: LocalNotificationScheduler(), persistence: persistence)
     }
@@ -660,13 +682,18 @@ public final class AppViewModel: ObservableObject {
         showToast("Deleted Page \(index + 1)")
     }
 
+    public func open(pageIndex: Int) {
+        guard store.pages.indices.contains(pageIndex) else { return }
+        selectedPageIndex = pageIndex
+    }
+
     public func notify(index: Int) {
         Task { @MainActor in
             do {
                 try await scheduler.requestAuthorizationIfNeeded()
                 let request = try store.notificationRequest(pageIndex: index)
                 try await scheduler.schedule(request)
-                showToast("Sceduled Notification")
+                showToast("Notification Created")
             } catch {
                 showToast("Failed to schedule Notification")
             }
@@ -748,15 +775,22 @@ public final class AppViewModel: ObservableObject {
 
 
     public func showToast(_ message: String) {
+        pendingToastDismissTask?.cancel()
         withAnimation(.easeInOut(duration: 0.2)) {
             toastMessage = message
         }
+        pendingToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, toastMessage == message else { return }
+            dismissToast(matching: message)
+        }
     }
 
-    public func dismissToast(after duration: Duration, matching message: String) async {
-        try? await Task.sleep(for: duration)
+    public func dismissToast(matching message: String) {
         guard toastMessage == message else { return }
-        withAnimation(.easeOut(duration: 0.2)) {
+        pendingToastDismissTask?.cancel()
+        pendingToastDismissTask = nil
+        withAnimation(.easeOut(duration: 0.35)) {
             toastMessage = nil
         }
     }
@@ -765,6 +799,13 @@ public final class AppViewModel: ObservableObject {
         pendingCloudPublishTask?.cancel()
         pendingCloudPublishTask = nil
         publishCurrentSnapshotIfNeeded()
+    }
+
+    public func refreshSharedSnapshotFromDisk() {
+        guard let snapshot = try? persistence.loadSnapshot(),
+              snapshot != store.snapshot
+        else { return }
+        applyRemoteSnapshot(snapshot)
     }
 
     private func startBackgroundServices(initialSnapshot: RemPushSnapshot) {
@@ -835,9 +876,18 @@ public final class AppViewModel: ObservableObject {
 
 
 @MainActor
-public final class LocalNotificationScheduler: @MainActor NotificationScheduling {
+public final class LocalNotificationScheduler: NSObject, @MainActor NotificationScheduling, UNUserNotificationCenterDelegate {
+    private enum UserInfoKey {
+        static let pageIndex = "pageIndex"
+    }
+
     private var authorized = false
-    public init() {}
+    public var onPageOpenRequest: ((Int) -> Void)?
+
+    public override init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
+    }
 
     public func requestAuthorizationIfNeeded() async throws {
         guard !authorized else { return }
@@ -867,9 +917,30 @@ public final class LocalNotificationScheduler: @MainActor NotificationScheduling
         content.title = request.title.isEmpty ? "RemPush" : request.title
         content.body = request.body
         content.sound = .default
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
-        let notification = UNNotificationRequest(identifier: "rempush-page-title-\(UUID().uuidString)", content: content, trigger: trigger)
+        content.userInfo = [UserInfoKey.pageIndex: request.pageIndex]
+        let notification = UNNotificationRequest(
+            identifier: "rempush-page-title-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
         try await UNUserNotificationCenter.current().add(notification)
+    }
+
+    nonisolated public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    nonisolated public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard let pageIndex = response.notification.request.content.userInfo[UserInfoKey.pageIndex] as? Int else { return }
+        await MainActor.run {
+            onPageOpenRequest?(pageIndex)
+        }
     }
 }
 

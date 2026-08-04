@@ -11,7 +11,9 @@ struct RemPushApp: App {
             ContentView(viewModel: viewModel)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
+            if phase == .active {
+                viewModel.refreshSharedSnapshotFromDisk()
+            } else {
                 viewModel.flushPendingSnapshotPersistence()
             }
         }
