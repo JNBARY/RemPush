@@ -51,13 +51,13 @@ final class RemPushCoreTests: XCTestCase {
         let store = NoteStore(clock: { Date(timeIntervalSince1970: 1) }, notificationScheduler: scheduler)
         try store.save(pageIndex: 0, title: "Push mich", body: "B")
         try store.scheduleTitleNotification(pageIndex: 0)
-        XCTAssertEqual(scheduler.requests, [.init(title: "Push mich", body: "RemPush Gedankenstütze")])
+        XCTAssertEqual(scheduler.requests, [.init(title: "Push mich", body: pages[pageIndex].body)])
     }
 
     func testPushRequestFallsBackWhenTitleIsEmptyAndRequiresScheduler() throws {
         let storeWithoutScheduler = NoteStore(clock: { Date(timeIntervalSince1970: 1) })
         try storeWithoutScheduler.save(pageIndex: 1, title: "", body: "Nur Body")
-        XCTAssertEqual(try storeWithoutScheduler.notificationRequest(pageIndex: 1), .init(title: "RemPush Seite 2", body: "RemPush Gedankenstütze"))
+        XCTAssertEqual(try storeWithoutScheduler.notificationRequest(pageIndex: 1), .init(title: "RemPush Seite 2", body: pages[pageIndex].body))
         XCTAssertThrowsError(try storeWithoutScheduler.scheduleTitleNotification(pageIndex: 1)) { error in
             XCTAssertEqual(error as? RemPushError, .notificationSchedulerMissing)
         }

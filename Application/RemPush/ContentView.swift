@@ -687,7 +687,7 @@ public final class AppViewModel: ObservableObject {
         pendingConflicts = result.1
         persistSnapshot()
         if !result.1.isEmpty {
-            showToast("Detedted iCloud-Conflict")
+            showToast("Deleted iCloud-Conflict")
         }
     }
 

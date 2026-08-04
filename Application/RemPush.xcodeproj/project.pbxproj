@@ -85,7 +85,6 @@
 				DD33F5042FDE98F400B9BAC4 /* RemPushCore */,
 				DDAFB9C32FDE9BE2002497E7 /* RemPushCore */,
 			);
-				EE00000F000000000000000F /* PBXTargetDependency */,
 			productName = RemPush;
 			productReference = DD33F4F32FDE98B300B9BAC4 /* RemPush.app */;
 			productType = "com.apple.product-type.application";
