@@ -778,6 +778,13 @@ public final class AppViewModel: ObservableObject {
         publishCurrentSnapshotIfNeeded()
     }
 
+    public func refreshSharedSnapshotFromDisk() {
+        guard let snapshot = try? persistence.loadSnapshot(),
+              snapshot != store.snapshot
+        else { return }
+        applyRemoteSnapshot(snapshot)
+    }
+
     private func startBackgroundServices(initialSnapshot: RemPushSnapshot) {
         cloudSync.onRemoteSnapshot = { [weak self] snapshot in
             Task { @MainActor in
