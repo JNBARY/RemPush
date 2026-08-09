@@ -233,8 +233,8 @@ async function showLocalNotification(title, body) {
     const registration = await navigator.serviceWorker.ready;
     await registration.showNotification(title, {
       body,
-      icon: 'app-icon.svg',
-      badge: 'app-icon.svg',
+      icon: 'Seiten_Strudel-RemPush.png',
+      badge: 'Seiten_Strudel-RemPush.png',
       tag: `rempush-local-${Date.now()}`,
       data: { url: './' }
     });

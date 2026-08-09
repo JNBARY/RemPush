@@ -7,7 +7,10 @@
         {
           "blend-mode" : "normal",
           "fill" : {
-            "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.24441,0.56869,1.05747,0.90000",
+              "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+            ]
           },
           "glass" : true,
           "hidden" : false,
@@ -24,7 +27,10 @@
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:0.20392,0.78039,0.34902,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.44053,0.82207,0.44527,0.90000",
+              "extended-srgb:0.20392,0.78039,0.34902,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-cyan.svg",
@@ -40,7 +46,10 @@
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:0.00000,0.76471,0.81569,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.38691,0.80441,0.85809,0.90000",
+              "extended-srgb:0.00000,0.76471,0.81569,1.00000"
+            ]
           },
           "glass" : true,
           "hidden" : false,
@@ -57,7 +66,20 @@
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:1.00000,0.80000,0.00000,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.95136,0.76817,0.15911,0.90000",
+              "extended-srgb:1.00000,0.80000,0.00000,1.00000"
+            ],
+            "orientation" : {
+              "start" : {
+                "x" : 0.5,
+                "y" : 1
+              },
+              "stop" : {
+                "x" : 0.5,
+                "y" : 0
+              }
+            }
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-orange.svg",
@@ -73,7 +95,10 @@
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:1.00000,0.21961,0.23529,1.00000"
+            "linear-gradient" : [
+              "display-p3:1.01803,0.32852,0.30398,0.90000",
+              "extended-srgb:1.00000,0.21961,0.23529,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-red.svg",
@@ -89,7 +114,10 @@
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:0.79608,0.18824,0.87843,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.81719,0.27705,0.94576,0.90000",
+              "extended-srgb:0.79608,0.18824,0.87843,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-purple.svg",
@@ -105,7 +133,10 @@
         },
         {
           "fill" : {
-            "solid" : "srgb:0.00000,0.56284,0.31882,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.26415,0.60476,0.37000,0.90000",
+              "srgb:0.00000,0.56284,0.31882,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-mint.svg",
@@ -114,14 +145,17 @@
           "position" : {
             "scale" : 2.5,
             "translation-in-points" : [
-              -229.03125,
-              -108.89855515362842
+              -261.04452023988574,
+              -108.60168015362842
             ]
           }
         },
         {
           "fill" : {
-            "solid" : "srgb:1.00000,0.57811,0.00000,1.00000"
+            "linear-gradient" : [
+              "display-p3:1.00203,0.65118,0.26084,0.90000",
+              "srgb:1.00000,0.57811,0.00000,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-yellow.svg",
@@ -130,14 +164,17 @@
           "position" : {
             "scale" : 2.5,
             "translation-in-points" : [
-              -261.04452023988574,
-              42.1640625
+              -301.31014523988574,
+              45.72283749999997
             ]
           }
         },
         {
           "fill" : {
-            "solid" : "extended-srgb:0.79608,0.18824,0.87843,1.00000"
+            "linear-gradient" : [
+              "display-p3:0.81719,0.27705,0.94576,0.90000",
+              "extended-srgb:0.79608,0.18824,0.87843,1.00000"
+            ]
           },
           "glass" : true,
           "image-name" : "Rectangle_rounded-pink.svg",
