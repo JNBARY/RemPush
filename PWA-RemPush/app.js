@@ -2,7 +2,6 @@ const COLORS = ['#ff0000','#ff9500','#ffd60a','#34c759','#63e6be','#00d9ff','#00
 const PAGE_COUNT = 9;
 const NOTES_KEY = 'rempush.notes.v2';
 const CURRENT_KEY = 'rempush.currentPage.v2';
-const VAPID_KEY = 'rempush.vapidPublicKey';
 const DB_NAME = 'RemPushNotifications';
 const DB_VERSION = 1;
 
@@ -136,7 +135,7 @@ pagesEl.addEventListener('transitionend', event => {
 });
 
 viewportEl.addEventListener('touchstart', event => {
-  if (event.touches.length !== 1) return;
+  if (event.touches.length !== 1 || navigationLocked) return;
   if (event.target.closest('input, textarea, button')) return;
   startX = event.touches[0].clientX;
   startY = event.touches[0].clientY;
@@ -193,15 +192,16 @@ document.getElementById('delete').onclick = () => {
 document.getElementById('notify').onclick = async () => {
   const note = notes[current];
   if (!note.title.trim() && !note.body.trim()) { showToast('Page is empty'); return; }
-  const ok = await requestNotificationPermission();
-  if (!ok) return;
+  if (!(await requestNotificationPermission())) return;
   const title = note.title.trim() || `RemPush Page ${current + 1}`;
   const body = note.body.trim() || 'RemPush reminder';
   try {
-    await showNotification(title, body);
+    await showLocalNotification(title, body);
     await logNotification({ title, body, page: current + 1, createdAt: new Date().toISOString(), source: 'local' });
     showToast('Notification displayed');
-  } catch (error) { showToast(`Notification failed: ${error.message || 'unknown error'}`); }
+  } catch (error) {
+    showToast(`Notification failed: ${error.message || 'unknown error'}`);
+  }
 };
 
 document.getElementById('share').onclick = async () => {
@@ -222,16 +222,29 @@ async function requestNotificationPermission() {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') showToast('Notification permission denied');
     return permission === 'granted';
-  } catch { showToast('Could not request notification permission'); return false; }
+  } catch {
+    showToast('Could not request notification permission');
+    return false;
+  }
 }
-async function showNotification(title, body) {
+
+async function showLocalNotification(title, body) {
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready;
-    await registration.showNotification(title, { body, icon: 'app-icon.png', badge: 'app-icon.png', tag: `rempush-${Date.now()}` });
+    await registration.showNotification(title, {
+      body,
+      icon: 'app-icon.svg',
+      badge: 'app-icon.svg',
+      tag: `rempush-local-${Date.now()}`,
+      data: { url: './' }
+    });
     return;
   }
-  if ('Notification' in window) new Notification(title, { body });
-  else throw new Error('Notifications are not supported');
+  if ('Notification' in window) {
+    new Notification(title, { body });
+    return;
+  }
+  throw new Error('Notifications are not supported');
 }
 
 function openDB() {
@@ -285,52 +298,23 @@ async function downloadLastMonth() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `RemPush-${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}.txt`;
-  document.body.appendChild(a); a.click(); a.remove();
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function openSettings() {
-  modal.innerHTML = '<h2>Settings</h2><button class="action primary" id="archive">Download previous month notifications</button><button class="action" id="enable">Enable notifications</button><button class="action" id="subscribe">Configure Web Push subscription</button><button class="action" id="close">Close</button>';
+  modal.innerHTML = '<h2>Settings</h2><button class="action primary" id="archive">Download previous month notifications</button><button class="action" id="enable">Enable notifications</button><button class="action" id="close">Close</button>';
   backdrop.classList.add('open');
   document.getElementById('archive').onclick = downloadLastMonth;
   document.getElementById('enable').onclick = async () => { await requestNotificationPermission(); };
-  document.getElementById('subscribe').onclick = configurePush;
   document.getElementById('close').onclick = closeModal;
 }
 function closeModal() { backdrop.classList.remove('open'); }
 backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
 window.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
 
-async function configurePush() {
-  if (!('PushManager' in window) || !('serviceWorker' in navigator)) { showToast('Web Push is not supported'); return; }
-  if (!window.isSecureContext) { showToast('Web Push requires HTTPS'); return; }
-  const currentKey = localStorage.getItem(VAPID_KEY) || '';
-  modal.innerHTML = '<h2>Web Push</h2><p>Enter the server VAPID public key. The resulting subscription must be sent to your Web Push backend.</p><input id="vapid" placeholder="VAPID public key"><button class="action primary" id="savePush">Create subscription</button><button class="action" id="close">Cancel</button>';
-  document.getElementById('vapid').value = currentKey;
-  document.getElementById('close').onclick = closeModal;
-  document.getElementById('savePush').onclick = async () => {
-    const key = document.getElementById('vapid').value.trim();
-    if (!key) { showToast('VAPID key required'); return; }
-    try {
-      if (!(await requestNotificationPermission())) return;
-      const registration = await navigator.serviceWorker.ready;
-      const existing = await registration.pushManager.getSubscription();
-      if (existing) await existing.unsubscribe();
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
-      localStorage.setItem(VAPID_KEY, key);
-      const serialized = JSON.stringify(subscription.toJSON(), null, 2);
-      if (navigator.clipboard) await navigator.clipboard.writeText(serialized);
-      showToast('Subscription created');
-      modal.innerHTML = '<h2>Web Push subscription</h2><p>The subscription JSON has been copied to the clipboard. Send it to your Web Push backend.</p><button class="action" id="close">Close</button>';
-      document.getElementById('close').onclick = closeModal;
-    } catch (error) { showToast(`Push subscription failed: ${error.message || 'unknown error'}`); }
-  };
-}
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-}
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try { await navigator.serviceWorker.register('./sw.js', { scope: './' }); }
