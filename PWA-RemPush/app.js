@@ -11,9 +11,12 @@ const viewportEl = document.getElementById('viewport');
 const backdrop = document.getElementById('modalBackdrop');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
+const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const monthFormatter = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
 
 let notes = loadNotes();
 let current = clamp(Number(localStorage.getItem(CURRENT_KEY) || 0));
+let notificationHistory = loadNotificationHistory();
 let physical = current + 1;
 let saveTimer = 0;
 let startX = 0;
@@ -24,44 +27,55 @@ let navigationLocked = false;
 
 function clamp(index) { return ((index % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT; }
 function emptyNote() { return { title: '', body: '', createdAt: null }; }
+
 function loadNotes() {
   try {
     const value = JSON.parse(localStorage.getItem(NOTES_KEY) || '[]');
     return Array.from({ length: PAGE_COUNT }, (_, i) => ({ ...emptyNote(), ...(value[i] || {}) }));
   } catch { return Array.from({ length: PAGE_COUNT }, emptyNote); }
 }
+
 function persist() {
   try { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }
   catch { showToast('Could not save notes'); }
 }
+
 function schedulePersist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 100);
 }
+
 function showToast(message) {
   toastEl.textContent = message;
   toastEl.classList.add('show');
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toastEl.classList.remove('show'), 1800);
 }
+
 function formatDate(value) {
   if (!value) return '';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  return Number.isNaN(date.getTime()) ? '' : dateFormatter.format(date);
 }
+
 function monthKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
+
 function monthStart(key) {
   const [year, month] = key.split('-').map(Number);
   return new Date(year, month - 1, 1);
 }
+
 function loadNotificationHistory() {
   try {
     const value = JSON.parse(localStorage.getItem(NOTIFICATION_HISTORY_KEY) || '[]');
-    return Array.isArray(value) ? value : [];
-  } catch { return []; }
+    if (Array.isArray(value)) return value;
+    if (value && Array.isArray(value.entries)) return value.entries;
+  } catch {}
+  return [];
 }
+
 function saveNotificationHistory(entries) {
   try {
     localStorage.setItem(NOTIFICATION_HISTORY_KEY, JSON.stringify(entries));
@@ -71,18 +85,29 @@ function saveNotificationHistory(entries) {
     return false;
   }
 }
+
 function addNotificationToHistory(notification) {
-  const history = loadNotificationHistory();
-  history.push(notification);
-  saveNotificationHistory(history);
+  notificationHistory.push(notification);
+  if (!saveNotificationHistory(notificationHistory)) {
+    notificationHistory.pop();
+    return false;
+  }
+  return true;
 }
+
 function getPreviousMonthKey() {
   const now = new Date();
   return monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
 }
+
 function getPreviousMonthNotifications() {
   const key = getPreviousMonthKey();
-  return loadNotificationHistory().filter(entry => entry.month === key);
+  return notificationHistory.filter(entry => entry.month === key);
+}
+
+function autoGrowTitle(title) {
+  title.style.height = '0px';
+  title.style.height = `${title.scrollHeight}px`;
 }
 
 function buildPage(index) {
@@ -92,11 +117,13 @@ function buildPage(index) {
   page.style.backgroundColor = COLORS[index];
   page.dataset.index = String(index);
 
-  const title = document.createElement('input');
+  const title = document.createElement('textarea');
   title.className = 'title';
   title.placeholder = 'Title';
   title.setAttribute('aria-label', 'Title');
   title.value = note.title;
+  title.rows = 1;
+  autoGrowTitle(title);
 
   const body = document.createElement('textarea');
   body.className = 'body';
@@ -117,7 +144,10 @@ function buildPage(index) {
   empty.textContent = note.title.trim() || note.body.trim() ? '' : 'is empty';
   footer.append(badge, created, empty);
 
-  title.addEventListener('input', () => savePage(index, title.value, body.value, page));
+  title.addEventListener('input', () => {
+    autoGrowTitle(title);
+    savePage(index, title.value, body.value, page);
+  });
   body.addEventListener('input', () => savePage(index, title.value, body.value, page));
   page.append(title, body, footer);
   return page;
@@ -146,7 +176,11 @@ function setPosition(animated = true, offset = 0) {
   pagesEl.style.transition = animated ? 'transform .25s cubic-bezier(.22,.61,.36,1)' : 'none';
   pagesEl.style.transform = `translate3d(calc(${-physical * 100}% + ${offset}px),0,0)`;
   document.body.style.backgroundColor = COLORS[current];
-  try { localStorage.setItem(CURRENT_KEY, String(current)); } catch {}
+}
+
+function persistCurrentPage() {
+  try { localStorage.setItem(CURRENT_KEY, String(current)); }
+  catch { showToast('Could not save current page'); }
 }
 
 function go(delta) {
@@ -154,7 +188,7 @@ function go(delta) {
   navigationLocked = true;
   physical += delta;
   current = clamp(current + delta);
-  document.body.style.backgroundColor = COLORS[current];
+  persistCurrentPage();
   setPosition(true);
 }
 
@@ -234,8 +268,9 @@ document.getElementById('notify').onclick = async () => {
   try {
     const createdAt = new Date().toISOString();
     await showLocalNotification(title, body);
-    addNotificationToHistory({ title, body, page: current + 1, createdAt, month: monthKey(new Date(createdAt)), source: 'local' });
-    showToast('Notification displayed');
+    if (addNotificationToHistory({ title, body, page: current + 1, createdAt, month: monthKey(new Date(createdAt)), source: 'local' })) {
+      showToast('Notification displayed');
+    }
   } catch (error) {
     showToast(`Notification failed: ${error.message || 'unknown error'}`);
   }
@@ -285,9 +320,8 @@ async function showLocalNotification(title, body) {
 
 function createNotificationReport(monthKeyValue, entries) {
   const start = monthStart(monthKeyValue);
-  const month = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(start);
   const lines = [
-    `RemPush notification archive — ${month}`,
+    `RemPush notification archive — ${monthFormatter.format(start)}`,
     `Notifications: ${entries.length}`,
     '',
     ...entries
@@ -298,7 +332,8 @@ function createNotificationReport(monthKeyValue, entries) {
   if (!entries.length) lines.push('No notifications recorded.');
   return new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
 }
-function downloadNotificationReport(monthKeyValue, entries = loadNotificationHistory().filter(n => n.month === monthKeyValue)) {
+
+function downloadNotificationReport(monthKeyValue, entries) {
   const blob = createNotificationReport(monthKeyValue, entries);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -309,29 +344,49 @@ function downloadNotificationReport(monthKeyValue, entries = loadNotificationHis
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
 function removeMonthFromHistory(monthKeyValue) {
-  saveNotificationHistory(loadNotificationHistory().filter(n => n.month !== monthKeyValue));
+  const remaining = notificationHistory.filter(n => n.month !== monthKeyValue);
+  if (!saveNotificationHistory(remaining)) return false;
+  notificationHistory = remaining;
+  return true;
 }
+
 function handleMonthChange() {
   const currentMonth = monthKey();
   const storedMonth = localStorage.getItem(NOTIFICATION_HISTORY_MONTH_KEY);
+
   if (!storedMonth) {
+    const foreignEntries = notificationHistory.filter(n => n.month !== currentMonth);
+    if (foreignEntries.length) {
+      notificationHistory = notificationHistory.filter(n => n.month === currentMonth);
+      saveNotificationHistory(notificationHistory);
+    }
     localStorage.setItem(NOTIFICATION_HISTORY_MONTH_KEY, currentMonth);
     return;
   }
-  if (storedMonth === currentMonth) return;
 
-  const oldEntries = loadNotificationHistory().filter(n => n.month === storedMonth);
+  if (storedMonth === currentMonth) {
+    const currentEntries = notificationHistory.filter(n => n.month === currentMonth);
+    if (currentEntries.length !== notificationHistory.length) {
+      notificationHistory = currentEntries;
+      saveNotificationHistory(notificationHistory);
+    }
+    return;
+  }
+
+  const oldEntries = notificationHistory.filter(n => n.month === storedMonth);
   if (oldEntries.length) {
     const alreadyAsked = localStorage.getItem(NOTIFICATION_ARCHIVE_PROMPT_KEY) === storedMonth;
     if (!alreadyAsked) {
-      const month = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(monthStart(storedMonth));
+      const month = monthFormatter.format(monthStart(storedMonth));
       const saveReport = confirm(`The notification history for ${month} is about to be deleted. Do you want to save the report first?`);
       localStorage.setItem(NOTIFICATION_ARCHIVE_PROMPT_KEY, storedMonth);
       if (saveReport) downloadNotificationReport(storedMonth, oldEntries);
     }
   }
-  removeMonthFromHistory(storedMonth);
+
+  if (!removeMonthFromHistory(storedMonth)) return;
   localStorage.setItem(NOTIFICATION_HISTORY_MONTH_KEY, currentMonth);
 }
 
@@ -339,7 +394,7 @@ function openSettings() {
   const previousMonth = getPreviousMonthKey();
   const previousEntries = getPreviousMonthNotifications();
   const archiveLabel = previousEntries.length
-    ? `Download ${new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(monthStart(previousMonth))} report (${previousEntries.length})`
+    ? `Download ${monthFormatter.format(monthStart(previousMonth))} report (${previousEntries.length})`
     : 'Download previous month notifications';
   modal.innerHTML = `<h2>Settings</h2><button class="action primary" id="archive">${archiveLabel}</button><button class="action" id="enable">Enable notifications</button><button class="action" id="close">Close</button>`;
   backdrop.classList.add('open');
@@ -347,6 +402,7 @@ function openSettings() {
   document.getElementById('enable').onclick = async () => { await requestNotificationPermission(); };
   document.getElementById('close').onclick = closeModal;
 }
+
 function closeModal() { backdrop.classList.remove('open'); }
 backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
 window.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
