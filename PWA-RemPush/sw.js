@@ -1,5 +1,5 @@
-const CACHE = 'rempush-pwa-v6';
-const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest', './Seiten_Strudel-RemPush.svg'];
+const CACHE = 'rempush-pwa-v7';
+const ASSETS = ['./', './index.html', './app.js', './current-month-report.js', './manifest.webmanifest', './Seiten_Strudel-RemPush.svg'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -31,7 +31,7 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE).then(cache => cache.put(event.request, copy));
         }
         return response;
-      }).catch(() => caches.match('./index.html'));
+      }).catch(() => caches.match('./index.html'))
     })
   );
 });
