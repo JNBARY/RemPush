@@ -23,15 +23,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
+      - name: Validate PWA files
+        run: |
+          test -f PWA-RemPush/index.html
+          test -f PWA-RemPush/app.js
+          test -f PWA-RemPush/sw.js
+          test -f PWA-RemPush/manifest.webmanifest
+          test -f PWA-RemPush/app-icon.svg
+          node --check PWA-RemPush/app.js
+          node --check PWA-RemPush/sw.js
 
-      - name: Upload PWA artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Prepare Pages artifact
+        run: |
+          mkdir -p _site
+          cp -R PWA-RemPush/. _site/
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: ./PWA-RemPush
+          path: _site
 
   deploy:
     environment:
