@@ -60,13 +60,28 @@ function downloadCurrentMonthReport() {
 }
 
 const settingsButton = document.getElementById('settings');
-if (settingsButton) {
-  settingsButton.onclick = () => {
-    const archiveButton = document.getElementById('archive');
-    if (!archiveButton) return;
+const settingsBackdrop = document.getElementById('modalBackdrop');
+const settingsModal = document.getElementById('modal');
 
+if (settingsButton && settingsBackdrop && settingsModal) {
+  settingsButton.onclick = () => {
     const count = loadCurrentMonthNotifications().length;
-    archiveButton.textContent = `Download current month notifications (${count})`;
-    archiveButton.onclick = downloadCurrentMonthReport;
+    const month = monthFormatter.format(new Date());
+
+    settingsModal.innerHTML = `
+      <h2>Settings</h2>
+      <button class="action primary" id="archive">Download ${month} notifications (${count})</button>
+      <button class="action" id="enable">Enable notifications</button>
+      <button class="action" id="close">Close</button>
+    `;
+    settingsBackdrop.classList.add('open');
+
+    document.getElementById('archive').onclick = downloadCurrentMonthReport;
+    document.getElementById('enable').onclick = async () => {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        await Notification.requestPermission();
+      }
+    };
+    document.getElementById('close').onclick = () => settingsBackdrop.classList.remove('open');
   };
 }
