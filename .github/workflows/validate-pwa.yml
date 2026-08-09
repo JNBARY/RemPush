@@ -1,0 +1,32 @@
+name: Validate RemPush PWA
+
+on:
+  push:
+    paths:
+      - 'PWA-RemPush/**'
+      - '.github/workflows/validate-pwa.yml'
+  pull_request:
+    paths:
+      - 'PWA-RemPush/**'
+      - '.github/workflows/validate-pwa.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate JavaScript syntax
+        run: node --check PWA-RemPush/app.js
+      - name: Validate service worker syntax
+        run: node --check PWA-RemPush/sw.js
+      - name: Validate required PWA files
+        run: |
+          test -f PWA-RemPush/index.html
+          test -f PWA-RemPush/manifest.webmanifest
+          test -f PWA-RemPush/app.js
+          test -f PWA-RemPush/sw.js
+          test -f PWA-RemPush/app-icon.svg
