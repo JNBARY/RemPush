@@ -14,12 +14,13 @@ const toastEl = document.getElementById('toast');
 
 let notes = loadNotes();
 let current = clamp(Number(localStorage.getItem(CURRENT_KEY) || 0));
+let physical = current + 1;
 let saveTimer = 0;
 let startX = 0;
 let startY = 0;
 let dragging = false;
-let dragX = 0;
 let suppressClick = false;
+let navigationLocked = false;
 
 function clamp(index) { return ((index % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT; }
 function emptyNote() { return { title: '', body: '', createdAt: null }; }
@@ -27,12 +28,11 @@ function loadNotes() {
   try {
     const value = JSON.parse(localStorage.getItem(NOTES_KEY) || '[]');
     return Array.from({ length: PAGE_COUNT }, (_, i) => ({ ...emptyNote(), ...(value[i] || {}) }));
-  } catch {
-    return Array.from({ length: PAGE_COUNT }, emptyNote);
-  }
+  } catch { return Array.from({ length: PAGE_COUNT }, emptyNote); }
 }
 function persist() {
-  try { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); } catch { showToast('Could not save notes'); }
+  try { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }
+  catch { showToast('Could not save notes'); }
 }
 function schedulePersist() {
   clearTimeout(saveTimer);
@@ -50,46 +50,51 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
+function buildPage(index) {
+  const note = notes[index];
+  const page = document.createElement('section');
+  page.className = 'page';
+  page.style.backgroundColor = COLORS[index];
+  page.dataset.index = String(index);
+
+  const title = document.createElement('input');
+  title.className = 'title';
+  title.placeholder = 'Title';
+  title.setAttribute('aria-label', 'Title');
+  title.value = note.title;
+
+  const body = document.createElement('textarea');
+  body.className = 'body';
+  body.placeholder = 'Your thoughts';
+  body.setAttribute('aria-label', 'Your thoughts');
+  body.value = note.body;
+
+  const footer = document.createElement('div');
+  footer.className = 'footer';
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.textContent = `Page ${index + 1} of ${PAGE_COUNT}`;
+  const created = document.createElement('span');
+  created.className = 'muted created';
+  created.textContent = formatDate(note.createdAt);
+  const empty = document.createElement('span');
+  empty.className = 'muted empty';
+  empty.textContent = note.title.trim() || note.body.trim() ? '' : 'is empty';
+  footer.append(badge, created, empty);
+
+  title.addEventListener('input', () => savePage(index, title.value, body.value, page));
+  body.addEventListener('input', () => savePage(index, title.value, body.value, page));
+  page.append(title, body, footer);
+  return page;
+}
+
 function render() {
   pagesEl.innerHTML = '';
   const fragment = document.createDocumentFragment();
-  notes.forEach((note, i) => {
-    const page = document.createElement('section');
-    page.className = 'page';
-    page.style.backgroundColor = COLORS[i];
-    page.dataset.index = String(i);
-
-    const title = document.createElement('input');
-    title.className = 'title';
-    title.placeholder = 'Title';
-    title.setAttribute('aria-label', 'Title');
-    title.value = note.title;
-
-    const body = document.createElement('textarea');
-    body.className = 'body';
-    body.placeholder = 'Your thoughts';
-    body.setAttribute('aria-label', 'Your thoughts');
-    body.value = note.body;
-
-    const footer = document.createElement('div');
-    footer.className = 'footer';
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = `Page ${i + 1} of ${PAGE_COUNT}`;
-    const created = document.createElement('span');
-    created.className = 'muted created';
-    created.textContent = formatDate(note.createdAt);
-    const empty = document.createElement('span');
-    empty.className = 'muted empty';
-    empty.textContent = note.title || note.body ? '' : 'is empty';
-    footer.append(badge, created, empty);
-
-    title.addEventListener('input', () => savePage(i, title.value, body.value, page));
-    body.addEventListener('input', () => savePage(i, title.value, body.value, page));
-    page.append(title, body, footer);
-    fragment.appendChild(page);
-  });
+  const order = [PAGE_COUNT - 1, ...Array.from({ length: PAGE_COUNT }, (_, i) => i), 0];
+  order.forEach(index => fragment.appendChild(buildPage(index)));
   pagesEl.appendChild(fragment);
+  physical = current + 1;
   setPosition(false);
 }
 
@@ -104,23 +109,37 @@ function savePage(index, title, body, page) {
 
 function setPosition(animated = true, offset = 0) {
   pagesEl.style.transition = animated ? 'transform .25s cubic-bezier(.22,.61,.36,1)' : 'none';
-  pagesEl.style.transform = `translate3d(calc(${-current * 100}% + ${offset}px),0,0)`;
+  pagesEl.style.transform = `translate3d(calc(${-physical * 100}% + ${offset}px),0,0)`;
   document.body.style.backgroundColor = COLORS[current];
   try { localStorage.setItem(CURRENT_KEY, String(current)); } catch {}
 }
+
 function go(delta) {
-  if (dragging) return;
+  if (dragging || navigationLocked) return;
+  navigationLocked = true;
+  physical += delta;
   current = clamp(current + delta);
+  document.body.style.backgroundColor = COLORS[current];
   setPosition(true);
 }
 
+pagesEl.addEventListener('transitionend', event => {
+  if (event.propertyName !== 'transform') return;
+  if (physical === 0) {
+    physical = PAGE_COUNT;
+    setPosition(false);
+  } else if (physical === PAGE_COUNT + 1) {
+    physical = 1;
+    setPosition(false);
+  }
+  navigationLocked = false;
+});
+
 viewportEl.addEventListener('touchstart', event => {
   if (event.touches.length !== 1) return;
-  const target = event.target;
-  if (target.closest('input, textarea, button')) return;
+  if (event.target.closest('input, textarea, button')) return;
   startX = event.touches[0].clientX;
   startY = event.touches[0].clientY;
-  dragX = 0;
   dragging = true;
   pagesEl.style.transition = 'none';
 }, { passive: true });
@@ -135,7 +154,6 @@ viewportEl.addEventListener('touchmove', event => {
     return;
   }
   if (Math.abs(dx) > Math.abs(dy)) event.preventDefault();
-  dragX = dx;
   setPosition(false, dx);
 }, { passive: false });
 
@@ -158,11 +176,7 @@ window.addEventListener('keydown', event => {
   if (event.key === 'ArrowRight') { event.preventDefault(); go(1); }
   if (event.key === 'ArrowLeft') { event.preventDefault(); go(-1); }
 });
-
-window.addEventListener('beforeunload', () => {
-  clearTimeout(saveTimer);
-  persist();
-});
+window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); persist(); });
 
 document.getElementById('delete').onclick = () => {
   if (suppressClick) return;
@@ -187,9 +201,7 @@ document.getElementById('notify').onclick = async () => {
     await showNotification(title, body);
     await logNotification({ title, body, page: current + 1, createdAt: new Date().toISOString(), source: 'local' });
     showToast('Notification displayed');
-  } catch (error) {
-    showToast(`Notification failed: ${error.message || 'unknown error'}`);
-  }
+  } catch (error) { showToast(`Notification failed: ${error.message || 'unknown error'}`); }
 };
 
 document.getElementById('share').onclick = async () => {
@@ -199,9 +211,7 @@ document.getElementById('share').onclick = async () => {
   try {
     if (navigator.share) await navigator.share({ title: note.title || `RemPush Page ${current + 1}`, text });
     else if (navigator.clipboard) { await navigator.clipboard.writeText(text); showToast('Copied to clipboard'); }
-  } catch (error) {
-    if (error?.name !== 'AbortError') showToast('Share failed');
-  }
+  } catch (error) { if (error?.name !== 'AbortError') showToast('Share failed'); }
 };
 document.getElementById('settings').onclick = openSettings;
 
@@ -212,10 +222,7 @@ async function requestNotificationPermission() {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') showToast('Notification permission denied');
     return permission === 'granted';
-  } catch {
-    showToast('Could not request notification permission');
-    return false;
-  }
+  } catch { showToast('Could not request notification permission'); return false; }
 }
 async function showNotification(title, body) {
   if ('serviceWorker' in navigator) {
@@ -266,9 +273,10 @@ async function downloadLastMonth() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const end = new Date(now.getFullYear(), now.getMonth(), 1);
-  const entries = (await getNotifications())
-    .filter(n => { const d = new Date(n.createdAt); return !Number.isNaN(d.getTime()) && d >= start && d < end; })
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const entries = (await getNotifications()).filter(n => {
+    const d = new Date(n.createdAt);
+    return !Number.isNaN(d.getTime()) && d >= start && d < end;
+  }).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const month = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(start);
   const lines = [`RemPush notification archive — ${month}`, '', ...entries.map(n => `${formatDate(n.createdAt)} | Page ${n.page ?? '-'} | ${n.title}\n${n.body}`)];
   if (!entries.length) lines.push('No notifications recorded.');
@@ -277,18 +285,12 @@ async function downloadLastMonth() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `RemPush-${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}.txt`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function openSettings() {
-  modal.innerHTML = '<h2>Settings</h2>' +
-    '<button class="action primary" id="archive">Download previous month notifications</button>' +
-    '<button class="action" id="enable">Enable notifications</button>' +
-    '<button class="action" id="subscribe">Configure Web Push subscription</button>' +
-    '<button class="action" id="close">Close</button>';
+  modal.innerHTML = '<h2>Settings</h2><button class="action primary" id="archive">Download previous month notifications</button><button class="action" id="enable">Enable notifications</button><button class="action" id="subscribe">Configure Web Push subscription</button><button class="action" id="close">Close</button>';
   backdrop.classList.add('open');
   document.getElementById('archive').onclick = downloadLastMonth;
   document.getElementById('enable').onclick = async () => { await requestNotificationPermission(); };
@@ -303,16 +305,14 @@ async function configurePush() {
   if (!('PushManager' in window) || !('serviceWorker' in navigator)) { showToast('Web Push is not supported'); return; }
   if (!window.isSecureContext) { showToast('Web Push requires HTTPS'); return; }
   const currentKey = localStorage.getItem(VAPID_KEY) || '';
-  modal.innerHTML = '<h2>Web Push</h2><p>Enter the server VAPID public key. The resulting subscription must be sent to your Web Push backend.</p><input id="vapid" placeholder="VAPID public key" value="">' +
-    '<button class="action primary" id="savePush">Create subscription</button><button class="action" id="close">Cancel</button>';
+  modal.innerHTML = '<h2>Web Push</h2><p>Enter the server VAPID public key. The resulting subscription must be sent to your Web Push backend.</p><input id="vapid" placeholder="VAPID public key"><button class="action primary" id="savePush">Create subscription</button><button class="action" id="close">Cancel</button>';
   document.getElementById('vapid').value = currentKey;
   document.getElementById('close').onclick = closeModal;
   document.getElementById('savePush').onclick = async () => {
     const key = document.getElementById('vapid').value.trim();
     if (!key) { showToast('VAPID key required'); return; }
     try {
-      const permission = await requestNotificationPermission();
-      if (!permission) return;
+      if (!(await requestNotificationPermission())) return;
       const registration = await navigator.serviceWorker.ready;
       const existing = await registration.pushManager.getSubscription();
       if (existing) await existing.unsubscribe();
@@ -321,11 +321,9 @@ async function configurePush() {
       const serialized = JSON.stringify(subscription.toJSON(), null, 2);
       if (navigator.clipboard) await navigator.clipboard.writeText(serialized);
       showToast('Subscription created');
-      modal.innerHTML = `<h2>Web Push subscription</h2><p>The subscription JSON has been copied to the clipboard. Send it to your Web Push backend.</p><button class="action" id="close">Close</button>`;
+      modal.innerHTML = '<h2>Web Push subscription</h2><p>The subscription JSON has been copied to the clipboard. Send it to your Web Push backend.</p><button class="action" id="close">Close</button>';
       document.getElementById('close').onclick = closeModal;
-    } catch (error) {
-      showToast(`Push subscription failed: ${error.message || 'unknown error'}`);
-    }
+    } catch (error) { showToast(`Push subscription failed: ${error.message || 'unknown error'}`); }
   };
 }
 function urlBase64ToUint8Array(base64String) {
@@ -333,7 +331,6 @@ function urlBase64ToUint8Array(base64String) {
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
-
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try { await navigator.serviceWorker.register('./sw.js', { scope: './' }); }
