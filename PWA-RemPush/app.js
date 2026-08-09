@@ -70,10 +70,9 @@ function monthStart(key) {
 function loadNotificationHistory() {
   try {
     const value = JSON.parse(localStorage.getItem(NOTIFICATION_HISTORY_KEY) || '[]');
-    if (Array.isArray(value)) return value;
-    if (value && Array.isArray(value.entries)) return value.entries;
-  } catch {}
-  return [];
+    const entries = Array.isArray(value) ? value : value && Array.isArray(value.entries) ? value.entries : [];
+    return entries.filter(entry => entry && typeof entry === 'object' && typeof entry.createdAt === 'string');
+  } catch { return []; }
 }
 
 function saveNotificationHistory(entries) {
@@ -87,11 +86,9 @@ function saveNotificationHistory(entries) {
 }
 
 function addNotificationToHistory(notification) {
-  notificationHistory.push(notification);
-  if (!saveNotificationHistory(notificationHistory)) {
-    notificationHistory.pop();
-    return false;
-  }
+  const nextHistory = [...notificationHistory, notification];
+  if (!saveNotificationHistory(nextHistory)) return false;
+  notificationHistory = nextHistory;
   return true;
 }
 
@@ -124,6 +121,7 @@ function buildPage(index) {
   title.value = note.title;
   title.rows = 1;
   autoGrowTitle(title);
+  installTitleSwipe(title);
 
   const body = document.createElement('textarea');
   body.className = 'body';
@@ -151,6 +149,62 @@ function buildPage(index) {
   body.addEventListener('input', () => savePage(index, title.value, body.value, page));
   page.append(title, body, footer);
   return page;
+}
+
+function installTitleSwipe(title) {
+  let titleStartX = 0;
+  let titleStartY = 0;
+  let titleDragging = false;
+  let titleSwipeActive = false;
+
+  title.addEventListener('touchstart', event => {
+    if (event.touches.length !== 1 || navigationLocked) return;
+    titleStartX = event.touches[0].clientX;
+    titleStartY = event.touches[0].clientY;
+    titleDragging = true;
+    titleSwipeActive = false;
+  }, { passive: true });
+
+  title.addEventListener('touchmove', event => {
+    if (!titleDragging || event.touches.length !== 1 || navigationLocked) return;
+    const dx = event.touches[0].clientX - titleStartX;
+    const dy = event.touches[0].clientY - titleStartY;
+
+    if (!titleSwipeActive) {
+      if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx)) {
+        titleDragging = false;
+        return;
+      }
+      if (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy)) return;
+      titleSwipeActive = true;
+      pagesEl.style.transition = 'none';
+    }
+
+    event.preventDefault();
+    setPosition(false, dx);
+  }, { passive: false });
+
+  title.addEventListener('touchend', event => {
+    if (!titleDragging) return;
+    titleDragging = false;
+    const dx = event.changedTouches[0].clientX - titleStartX;
+    const dy = event.changedTouches[0].clientY - titleStartY;
+
+    if (titleSwipeActive && Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      suppressClick = true;
+      go(dx < 0 ? 1 : -1);
+      setTimeout(() => { suppressClick = false; }, 300);
+    } else {
+      setPosition(true);
+    }
+    titleSwipeActive = false;
+  }, { passive: true });
+
+  title.addEventListener('touchcancel', () => {
+    titleDragging = false;
+    titleSwipeActive = false;
+    setPosition(true);
+  }, { passive: true });
 }
 
 function render() {
@@ -357,23 +411,11 @@ function handleMonthChange() {
   const storedMonth = localStorage.getItem(NOTIFICATION_HISTORY_MONTH_KEY);
 
   if (!storedMonth) {
-    const foreignEntries = notificationHistory.filter(n => n.month !== currentMonth);
-    if (foreignEntries.length) {
-      notificationHistory = notificationHistory.filter(n => n.month === currentMonth);
-      saveNotificationHistory(notificationHistory);
-    }
     localStorage.setItem(NOTIFICATION_HISTORY_MONTH_KEY, currentMonth);
     return;
   }
 
-  if (storedMonth === currentMonth) {
-    const currentEntries = notificationHistory.filter(n => n.month === currentMonth);
-    if (currentEntries.length !== notificationHistory.length) {
-      notificationHistory = currentEntries;
-      saveNotificationHistory(notificationHistory);
-    }
-    return;
-  }
+  if (storedMonth === currentMonth) return;
 
   const oldEntries = notificationHistory.filter(n => n.month === storedMonth);
   if (oldEntries.length) {
@@ -406,6 +448,10 @@ function openSettings() {
 function closeModal() { backdrop.classList.remove('open'); }
 backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
 window.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') handleMonthChange();
+});
+window.addEventListener('pageshow', handleMonthChange);
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
