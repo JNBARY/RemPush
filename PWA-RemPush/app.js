@@ -2,8 +2,9 @@ const COLORS = ['#ff0000','#ff9500','#ffd60a','#34c759','#63e6be','#00d9ff','#00
 const PAGE_COUNT = 9;
 const NOTES_KEY = 'rempush.notes.v2';
 const CURRENT_KEY = 'rempush.currentPage.v2';
-const DB_NAME = 'RemPushNotifications';
-const DB_VERSION = 1;
+const NOTIFICATION_HISTORY_KEY = 'rempush.notificationHistory.v1';
+const NOTIFICATION_HISTORY_MONTH_KEY = 'rempush.notificationHistoryMonth.v1';
+const NOTIFICATION_ARCHIVE_PROMPT_KEY = 'rempush.notificationArchivePrompt.v1';
 
 const pagesEl = document.getElementById('pages');
 const viewportEl = document.getElementById('viewport');
@@ -47,6 +48,41 @@ function formatDate(value) {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+function monthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+function monthStart(key) {
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1);
+}
+function loadNotificationHistory() {
+  try {
+    const value = JSON.parse(localStorage.getItem(NOTIFICATION_HISTORY_KEY) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+function saveNotificationHistory(entries) {
+  try {
+    localStorage.setItem(NOTIFICATION_HISTORY_KEY, JSON.stringify(entries));
+    return true;
+  } catch {
+    showToast('Could not save notification history');
+    return false;
+  }
+}
+function addNotificationToHistory(notification) {
+  const history = loadNotificationHistory();
+  history.push(notification);
+  saveNotificationHistory(history);
+}
+function getPreviousMonthKey() {
+  const now = new Date();
+  return monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+}
+function getPreviousMonthNotifications() {
+  const key = getPreviousMonthKey();
+  return loadNotificationHistory().filter(entry => entry.month === key);
 }
 
 function buildPage(index) {
@@ -196,8 +232,9 @@ document.getElementById('notify').onclick = async () => {
   const title = note.title.trim() || `RemPush Page ${current + 1}`;
   const body = note.body.trim() || 'RemPush reminder';
   try {
+    const createdAt = new Date().toISOString();
     await showLocalNotification(title, body);
-    await logNotification({ title, body, page: current + 1, createdAt: new Date().toISOString(), source: 'local' });
+    addNotificationToHistory({ title, body, page: current + 1, createdAt, month: monthKey(new Date(createdAt)), source: 'local' });
     showToast('Notification displayed');
   } catch (error) {
     showToast(`Notification failed: ${error.message || 'unknown error'}`);
@@ -246,67 +283,67 @@ async function showLocalNotification(title, body) {
   throw new Error('Notifications are not supported');
 }
 
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains('notifications')) request.result.createObjectStore('notifications', { keyPath: 'id', autoIncrement: true });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function logNotification(notification) {
-  try {
-    const db = await openDB();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('notifications', 'readwrite');
-      tx.objectStore('notifications').add(notification);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
-    db.close();
-  } catch {}
-}
-async function getNotifications() {
-  try {
-    const db = await openDB();
-    const result = await new Promise((resolve, reject) => {
-      const tx = db.transaction('notifications', 'readonly');
-      const request = tx.objectStore('notifications').getAll();
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    });
-    db.close();
-    return result;
-  } catch { return []; }
-}
-async function downloadLastMonth() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const end = new Date(now.getFullYear(), now.getMonth(), 1);
-  const entries = (await getNotifications()).filter(n => {
-    const d = new Date(n.createdAt);
-    return !Number.isNaN(d.getTime()) && d >= start && d < end;
-  }).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+function createNotificationReport(monthKeyValue, entries) {
+  const start = monthStart(monthKeyValue);
   const month = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(start);
-  const lines = [`RemPush notification archive — ${month}`, '', ...entries.map(n => `${formatDate(n.createdAt)} | Page ${n.page ?? '-'} | ${n.title}\n${n.body}`)];
+  const lines = [
+    `RemPush notification archive — ${month}`,
+    `Notifications: ${entries.length}`,
+    '',
+    ...entries
+      .slice()
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(n => `${formatDate(n.createdAt)} | Page ${n.page ?? '-'} | ${n.title}\n${n.body}`)
+  ];
   if (!entries.length) lines.push('No notifications recorded.');
-  const blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
+  return new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
+}
+function downloadNotificationReport(monthKeyValue, entries = loadNotificationHistory().filter(n => n.month === monthKeyValue)) {
+  const blob = createNotificationReport(monthKeyValue, entries);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `RemPush-${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}.txt`;
+  a.download = `RemPush-${monthKeyValue}.txt`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function removeMonthFromHistory(monthKeyValue) {
+  saveNotificationHistory(loadNotificationHistory().filter(n => n.month !== monthKeyValue));
+}
+function handleMonthChange() {
+  const currentMonth = monthKey();
+  const storedMonth = localStorage.getItem(NOTIFICATION_HISTORY_MONTH_KEY);
+  if (!storedMonth) {
+    localStorage.setItem(NOTIFICATION_HISTORY_MONTH_KEY, currentMonth);
+    return;
+  }
+  if (storedMonth === currentMonth) return;
+
+  const oldEntries = loadNotificationHistory().filter(n => n.month === storedMonth);
+  if (oldEntries.length) {
+    const alreadyAsked = localStorage.getItem(NOTIFICATION_ARCHIVE_PROMPT_KEY) === storedMonth;
+    if (!alreadyAsked) {
+      const month = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(monthStart(storedMonth));
+      const saveReport = confirm(`The notification history for ${month} is about to be deleted. Do you want to save the report first?`);
+      localStorage.setItem(NOTIFICATION_ARCHIVE_PROMPT_KEY, storedMonth);
+      if (saveReport) downloadNotificationReport(storedMonth, oldEntries);
+    }
+  }
+  removeMonthFromHistory(storedMonth);
+  localStorage.setItem(NOTIFICATION_HISTORY_MONTH_KEY, currentMonth);
+}
 
 function openSettings() {
-  modal.innerHTML = '<h2>Settings</h2><button class="action primary" id="archive">Download previous month notifications</button><button class="action" id="enable">Enable notifications</button><button class="action" id="close">Close</button>';
+  const previousMonth = getPreviousMonthKey();
+  const previousEntries = getPreviousMonthNotifications();
+  const archiveLabel = previousEntries.length
+    ? `Download ${new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(monthStart(previousMonth))} report (${previousEntries.length})`
+    : 'Download previous month notifications';
+  modal.innerHTML = `<h2>Settings</h2><button class="action primary" id="archive">${archiveLabel}</button><button class="action" id="enable">Enable notifications</button><button class="action" id="close">Close</button>`;
   backdrop.classList.add('open');
-  document.getElementById('archive').onclick = downloadLastMonth;
+  document.getElementById('archive').onclick = () => downloadNotificationReport(previousMonth, previousEntries);
   document.getElementById('enable').onclick = async () => { await requestNotificationPermission(); };
   document.getElementById('close').onclick = closeModal;
 }
@@ -320,5 +357,6 @@ async function registerServiceWorker() {
   catch { showToast('Offline support could not be enabled'); }
 }
 
+handleMonthChange();
 render();
 registerServiceWorker();
