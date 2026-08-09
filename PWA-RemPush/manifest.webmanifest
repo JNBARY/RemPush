@@ -9,6 +9,6 @@
   "background_color": "#111111",
   "theme_color": "#111111",
   "icons": [
-    { "src": "Seiten_Strudel-RemPush.png", "sizes": "1024x1024", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "Seiten_Strudel-RemPush.svg", "sizes": "1024x1024", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
 }

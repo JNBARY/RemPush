@@ -29,4 +29,4 @@ jobs:
           test -f PWA-RemPush/manifest.webmanifest
           test -f PWA-RemPush/app.js
           test -f PWA-RemPush/sw.js
-          test -f PWA-RemPush/app-icon.svg
+          test -f PWA-RemPush/Seiten_Strudel-RemPush.svg
