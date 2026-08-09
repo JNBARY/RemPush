@@ -448,6 +448,10 @@ function openSettings() {
 function closeModal() { backdrop.classList.remove('open'); }
 backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
 window.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') handleMonthChange();
+});
+window.addEventListener('pageshow', handleMonthChange);
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
