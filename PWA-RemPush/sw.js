@@ -1,5 +1,5 @@
-const CACHE = 'rempush-pwa-v2';
-const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest', './app-icon.png'];
+const CACHE = 'rempush-pwa-v3';
+const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest', './app-icon.svg'];
 const DB_NAME = 'RemPushNotifications';
 const DB_VERSION = 1;
 
@@ -31,28 +31,23 @@ self.addEventListener('fetch', event => {
   );
 });
 
-self.addEventListener('push', event => {
-  event.waitUntil(handlePush(event));
-});
+self.addEventListener('push', event => event.waitUntil(handlePush(event)));
 
 async function handlePush(event) {
   let data = {};
   try { data = event.data ? event.data.json() : {}; }
   catch { data = { body: event.data?.text() || '' }; }
-
   const title = data.title || 'RemPush';
   const body = data.body || 'New reminder';
   const createdAt = new Date().toISOString();
-  const notification = {
-    body,
-    icon: data.icon || './app-icon.png',
-    badge: data.badge || './app-icon.png',
-    tag: data.tag || `rempush-${Date.now()}`,
-    data: { page: data.page ?? null, url: data.url || './' }
-  };
-
   await Promise.all([
-    self.registration.showNotification(title, notification),
+    self.registration.showNotification(title, {
+      body,
+      icon: data.icon || './app-icon.svg',
+      badge: data.badge || './app-icon.svg',
+      tag: data.tag || `rempush-${Date.now()}`,
+      data: { page: data.page ?? null, url: data.url || './' }
+    }),
     storeNotification({ title, body, page: data.page ?? null, createdAt, source: 'push' })
   ]);
 }
@@ -60,13 +55,11 @@ async function handlePush(event) {
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   const url = event.notification.data?.url || './';
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      const existing = list.find(client => 'focus' in client);
-      if (existing) return existing.focus();
-      return clients.openWindow(url);
-    })
-  );
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const existing = list.find(client => 'focus' in client);
+    if (existing) return existing.focus();
+    return clients.openWindow(url);
+  }));
 });
 
 function openDB() {
