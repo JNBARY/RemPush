@@ -234,7 +234,6 @@ async function showLocalNotification(title, body) {
     await registration.showNotification(title, {
       body,
       icon: 'Seiten_Strudel-RemPush.svg',
-      badge: 'Seiten_Strudel-RemPush.svg',
       tag: `rempush-local-${Date.now()}`,
       data: { url: './' }
     });
