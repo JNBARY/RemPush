@@ -102,6 +102,11 @@ function getPreviousMonthNotifications() {
   return notificationHistory.filter(entry => entry.month === key);
 }
 
+function getCurrentMonthNotifications() {
+  const key = monthKey();
+  return notificationHistory.filter(entry => entry.month === key || (!entry.month && monthKey(new Date(entry.createdAt)) === key));
+}
+
 function autoGrowTitle(title) {
   title.style.height = '0px';
   title.style.height = `${title.scrollHeight}px`;
@@ -433,14 +438,14 @@ function handleMonthChange() {
 }
 
 function openSettings() {
-  const previousMonth = getPreviousMonthKey();
-  const previousEntries = getPreviousMonthNotifications();
-  const archiveLabel = previousEntries.length
-    ? `Download ${monthFormatter.format(monthStart(previousMonth))} report (${previousEntries.length})`
-    : 'Download previous month notifications';
+  const currentMonth = monthKey();
+  const currentEntries = getCurrentMonthNotifications();
+  const archiveLabel = currentEntries.length
+    ? `Download ${monthFormatter.format(monthStart(currentMonth))} report (${currentEntries.length})`
+    : `Download ${monthFormatter.format(monthStart(currentMonth))} notifications`;
   modal.innerHTML = `<h2>Settings</h2><button class="action primary" id="archive">${archiveLabel}</button><button class="action" id="enable">Enable notifications</button><button class="action" id="close">Close</button>`;
   backdrop.classList.add('open');
-  document.getElementById('archive').onclick = () => downloadNotificationReport(previousMonth, previousEntries);
+  document.getElementById('archive').onclick = () => downloadNotificationReport(currentMonth, getCurrentMonthNotifications());
   document.getElementById('enable').onclick = async () => { await requestNotificationPermission(); };
   document.getElementById('close').onclick = closeModal;
 }
