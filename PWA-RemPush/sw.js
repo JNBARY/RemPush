@@ -1,4 +1,4 @@
-const CACHE = 'rempush-pwa-v7';
+const CACHE = 'rempush-pwa-v8-title-layout';
 const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest', './Seiten_Strudel-RemPush.svg'];
 
 self.addEventListener('install', event => {
