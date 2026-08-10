@@ -460,19 +460,6 @@ window.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pageshow', handleMonthChange);
 
-async function requestNotificationPermission() {
-  if (!('Notification' in window)) { showToast('Notifications are not supported'); return false; }
-  if (Notification.permission === 'granted') return true;
-  try {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') showToast('Notification permission denied');
-    return permission === 'granted';
-  } catch {
-    showToast('Could not request notification permission');
-    return false;
-  }
-}
-
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try { await navigator.serviceWorker.register('./sw.js', { scope: './' }); }
