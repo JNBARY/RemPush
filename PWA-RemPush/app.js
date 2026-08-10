@@ -125,8 +125,10 @@ function buildPage(index) {
   title.setAttribute('aria-label', 'Title');
   title.value = note.title;
   title.rows = 1;
-  autoGrowTitle(title);
-  installTitleSwipe(title);
+  title.addEventListener('input', () => {
+    autoGrowTitle(title);
+    savePage(index, title.value, body.value, page);
+  });
 
   const body = document.createElement('textarea');
   body.className = 'body';
@@ -147,12 +149,9 @@ function buildPage(index) {
   empty.textContent = note.title.trim() || note.body.trim() ? '' : 'is empty';
   footer.append(badge, created, empty);
 
-  title.addEventListener('input', () => {
-    autoGrowTitle(title);
-    savePage(index, title.value, body.value, page);
-  });
   body.addEventListener('input', () => savePage(index, title.value, body.value, page));
   page.append(title, body, footer);
+  installTitleSwipe(title);
   return page;
 }
 
@@ -220,6 +219,9 @@ function render() {
   pagesEl.appendChild(fragment);
   physical = current + 1;
   setPosition(false);
+  requestAnimationFrame(() => {
+    pagesEl.querySelectorAll('.title').forEach(autoGrowTitle);
+  });
 }
 
 function savePage(index, title, body, page) {
@@ -457,6 +459,19 @@ window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') handleMonthChange();
 });
 window.addEventListener('pageshow', handleMonthChange);
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) { showToast('Notifications are not supported'); return false; }
+  if (Notification.permission === 'granted') return true;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') showToast('Notification permission denied');
+    return permission === 'granted';
+  } catch {
+    showToast('Could not request notification permission');
+    return false;
+  }
+}
 
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
