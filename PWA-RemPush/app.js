@@ -1,6 +1,7 @@
 const COLORS = ['#ff0000','#ff9500','#ffd60a','#34c759','#63e6be','#00d9ff','#007aff','#af52de','#ff2d55'];
 const PAGE_COUNT = 9;
-const NOTES_KEY = 'rempush.notes.v2';
+const CURRENT_NOTES_KEY = 'rempush.currentNotes.v1';
+const LEGACY_NOTES_KEY = 'rempush.notes.v2';
 const CURRENT_KEY = 'rempush.currentPage.v2';
 const NOTIFICATION_HISTORY_KEY = 'rempush.notificationHistory.v1';
 const NOTIFICATION_HISTORY_MONTH_KEY = 'rempush.notificationHistoryMonth.v1';
@@ -28,21 +29,36 @@ let navigationLocked = false;
 function clamp(index) { return ((index % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT; }
 function emptyNote() { return { title: '', body: '', createdAt: null }; }
 
+function normalizeNotes(value) {
+  return Array.from({ length: PAGE_COUNT }, (_, i) => ({ ...emptyNote(), ...(value?.[i] || {}) }));
+}
+
 function loadNotes() {
   try {
-    const value = JSON.parse(localStorage.getItem(NOTES_KEY) || '[]');
-    return Array.from({ length: PAGE_COUNT }, (_, i) => ({ ...emptyNote(), ...(value[i] || {}) }));
-  } catch { return Array.from({ length: PAGE_COUNT }, emptyNote); }
+    const currentValue = JSON.parse(localStorage.getItem(CURRENT_NOTES_KEY) || 'null');
+    if (Array.isArray(currentValue)) return normalizeNotes(currentValue);
+
+    // Migrate notes created by older PWA versions without changing their content.
+    const legacyValue = JSON.parse(localStorage.getItem(LEGACY_NOTES_KEY) || '[]');
+    const migrated = normalizeNotes(legacyValue);
+    localStorage.setItem(CURRENT_NOTES_KEY, JSON.stringify(migrated));
+    return migrated;
+  } catch {
+    return Array.from({ length: PAGE_COUNT }, emptyNote);
+  }
 }
 
 function persist() {
-  try { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }
-  catch { showToast('Could not save notes'); }
+  try {
+    localStorage.setItem(CURRENT_NOTES_KEY, JSON.stringify(notes));
+  } catch {
+    showToast('Could not save notes');
+  }
 }
 
 function schedulePersist() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(persist, 100);
+  saveTimer = setTimeout(persist, 50);
 }
 
 function showToast(message) {
@@ -306,7 +322,17 @@ window.addEventListener('keydown', event => {
   if (event.key === 'ArrowRight') { event.preventDefault(); go(1); }
   if (event.key === 'ArrowLeft') { event.preventDefault(); go(-1); }
 });
-window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); persist(); });
+
+function flushNotePersistence() {
+  clearTimeout(saveTimer);
+  persist();
+}
+
+window.addEventListener('beforeunload', flushNotePersistence);
+window.addEventListener('pagehide', flushNotePersistence);
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushNotePersistence();
+});
 
 document.getElementById('delete').onclick = () => {
   if (suppressClick) return;
